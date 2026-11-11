@@ -67,8 +67,21 @@ if keys.key_in(f'client = OpenAI(api_key="{openai}")') != "OPENAI_API_KEY":
     bad.append("key_in missed a key written into code")
 if keys.key_in('client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])'):
     bad.append("key_in flagged code that reads an environment variable")
+# Claude Code logs a blocked message after the hook returns; scrub_in_place blanks the key without moving bytes.
+import tempfile
+from pathlib import Path
+fake = rand(30)
+log = Path(tempfile.mkdtemp()) / "session.jsonl"
+before = f'{{"a":1}}\n{{"content":"Original prompt: save this as X: {fake}"}}\n'
+log.write_text(before)
+hits = keys.scrub_in_place(log, [fake.encode()])
+after = log.read_text()
+if hits != 1 or fake in after or len(after) != len(before) or "X: " + "*" * 30 not in after:
+    bad.append("scrub_in_place didn't blank the key in place")
+log.unlink()
+log.parent.rmdir()
 for b in bad:
     print("WRONG:", b)
-total = len(FOUND) + len(NOTHING) + 2
+total = len(FOUND) + len(NOTHING) + 3
 print(f"{total - len(bad)}/{total} message cases right")
 raise SystemExit(1 if bad else 0)

@@ -8,12 +8,13 @@
 The blocking only catches the usual ways a key gets printed. A determined command can still print one.
 """
 import json
+import os
 import re
 import sys
 import time
 from pathlib import Path
 
-GRANTS = Path.home() / ".agent-keys" / "grants.json"
+GRANTS = Path(os.environ.get("AGENT_KEYS_STATE") or Path.home() / ".agent-keys") / "grants.json"
 KEYS = f'"{Path(sys.executable).as_posix()}" "{(Path(__file__).resolve().parent / "keys.py").as_posix()}"'
 MASK = f'"{Path(sys.executable).as_posix()}" -u "{(Path(__file__).resolve().parent / "mask.py").as_posix()}"'
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Claude Code UserPromptSubmit hook from keywarden. It sees every message you send before Claude does.
 
-1. If the message has a key in it, it saves the key and stops the message, so the key never reaches Claude,
-   its chat log or the model provider. See keys.find_keys for what counts.
+1. If the message has a key in it, it saves the key and stops the message, so the key never reaches Claude or
+   the model provider. Claude Code still logs the stopped message, so a background job blanks the key out of
+   that log. See keys.find_keys for what counts.
 2. If Claude asked for a key and you reply approve (or yes, ok, approve 1h), it creates the grant. If you reply
    no, it drops the request. Only a message you typed can do this, so Claude can't approve itself.
 """
@@ -36,9 +37,32 @@ def minutes_in(text):
     return n * (1440 if unit.startswith("d") else 60 if unit.startswith("h") else 1)
 
 
+def scrub_later(transcript, values):
+    """Claude Code writes a blocked message into the session log ("Original prompt: ...") after this hook
+    returns. Start a background job that blanks the keys out of that log once the line lands."""
+    if not transcript:
+        return
+    import subprocess
+    # On a session's first message the log file doesn't exist yet. The job waits for it.
+    start = max(0, Path(transcript).stat().st_size - 65536) if Path(transcript).exists() else 0
+    cmd = [sys.executable, str(Path(__file__).resolve().parent / "keys.py"), "_scrub", transcript, str(start)]
+    kw = {"stdin": subprocess.PIPE, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
+    if sys.platform == "win32":  # keep running after the hook exits, with no console window
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        try:
+            p = subprocess.Popen(cmd, creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **kw)
+        except OSError:
+            p = subprocess.Popen(cmd, creationflags=flags, **kw)
+    else:
+        p = subprocess.Popen(cmd, start_new_session=True, **kw)
+    p.stdin.write("\n".join(values).encode())
+    p.stdin.close()
+
+
 def main():
     try:
-        text = json.load(sys.stdin).get("prompt") or ""
+        data = json.load(sys.stdin)
+        text = data.get("prompt") or ""
         import keys
         found = keys.find_keys(text)
     except BaseException:
@@ -48,6 +72,10 @@ def main():
             results = keys.save_found(found)
         except BaseException as e:  # keys.die() raises SystemExit
             block(f"keywarden couldn't save the key ({e}). Your message wasn't sent.")
+        try:
+            scrub_later(data.get("transcript_path"), [v for _, v, _ in found])
+        except BaseException:
+            pass
         words = {"saved": "Saved", "replaced": "Replaced the old", "already saved": "Already had"}
         done = ". ".join(f"{words[how]} {name}" for name, how in results)
         block(f"{done}. Your message wasn't sent, so the key never reached Claude. Now ask Claude to use "

@@ -981,7 +981,43 @@ def cmd_rescue(args):
         print("Rotate any key that was pasted into chat: it was also sent to the model provider.")
 
 
-COMMANDS = {"setup": cmd_setup, "switch": cmd_switch, "strict": cmd_strict, "approvals": cmd_approvals,
+def scrub_in_place(f, values, start=0):
+    """Overwrite each value in file f with asterisks of the same length, without moving any other bytes, so a
+    session that is still appending to the file is not disturbed. Only looks at bytes from `start` on."""
+    hits = 0
+    try:
+        with open(f, "r+b") as fh:
+            fh.seek(start)
+            buf = fh.read()
+            for v in values:
+                i = buf.find(v)
+                while i != -1:
+                    fh.seek(start + i)
+                    fh.write(b"*" * len(v))
+                    hits += 1
+                    i = buf.find(v, i + len(v))
+    except OSError:
+        pass
+    return hits
+
+
+def cmd_scrub(args):
+    """keys _scrub FILE OFFSET, with the values on stdin. The prompt hook starts this in the background after it
+    saves a pasted key: Claude Code writes the blocked message, key included, into the session log after the
+    hook returns, so this waits for that line and blanks the key out for the next 30 seconds."""
+    path, start = Path(args[0]), max(0, int(args[1]))
+    values = set()
+    for v in sys.stdin.read().splitlines():
+        if len(v) >= 8:
+            values.add(v.encode())
+            values.add(json.dumps(v)[1:-1].encode())  # the form it takes inside a JSON line
+    end = time.time() + 30
+    while values and time.time() < end:
+        time.sleep(1)
+        scrub_in_place(path, values, start)
+
+
+COMMANDS = {"_scrub": cmd_scrub, "setup": cmd_setup, "switch": cmd_switch, "strict": cmd_strict, "approvals": cmd_approvals,
             "protect": cmd_protect, "unprotect": cmd_unprotect, "phone": cmd_phone, "remove": cmd_remove, "lock": cmd_lock, "grant": cmd_grant, "status": cmd_status, "env": cmd_env, "add": cmd_add, "import": cmd_import, "list": cmd_list, "rename": cmd_rename, "ref": cmd_ref,
             "run": cmd_run, "rescue": cmd_rescue}
 
