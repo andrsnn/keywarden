@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 APPROVE = re.compile(r"(?i)^\s*(?:approve[sd]?|yes|yep|yeah|y|ok|okay|allow|allowed|sure|go ahead|do it|grant)\b")
 DENY = re.compile(r"(?i)^\s*(?:no|nope|deny|denied|don'?t|stop)\b")
+NOTICES = ("<task-notification", "<system-reminder", "<command-", "<local-command", "<bash-", "<user-memory",
+           "Another Claude session", "[SYSTEM NOTIFICATION")
 TIME = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\b")
 
 
@@ -63,13 +65,15 @@ def main():
     try:
         data = json.load(sys.stdin)
         text = data.get("prompt") or ""
+        if text.lstrip().startswith(NOTICES):
+            sys.exit(0)  # Claude Code's own notices aren't the person typing, and their long IDs aren't keys
         import keys
         found = keys.find_keys(text)
     except BaseException:
         sys.exit(0)  # never get in the way of a message because of a bug here
     if found:
         try:
-            results = keys.save_found(found)
+            results = keys.save_found(found, text, data.get("cwd") or "")
         except BaseException as e:  # keys.die() raises SystemExit
             block(f"keywarden couldn't save the key ({e}). Your message wasn't sent.")
         try:

@@ -9,10 +9,11 @@
   keys approvals chat|phone|off     how a key gets a grant: you reply approve (default), a phone tap, or no question
   keys protect NAME                 this key always needs a tap (keys unprotect NAME to undo)
   keys phone                        approve key use from your phone (then: keys phone test)
-  keys add NAME [--clipboard | --from-env VAR]
+  keys add NAME [--clipboard | --from-env VAR] [--note "what it is"]
                                     save a key (from the clipboard, a variable, a pipe, or typed hidden)
   keys import FILE.env              save every NAME=value line of a .env file
-  keys list                         list saved key names
+  keys list                         list saved keys: what each is, when and where it was saved
+  keys note NAME "what it is"       add a note to a key, shown in keys list and to each new Claude session
   keys rename OLD NEW               rename a saved key
   keys remove NAME                  delete a saved key
   keys ref NAME                     print the line for a .env.tpl file
@@ -44,6 +45,7 @@ HOME = Path.home()
 STATE = stores.STATE
 CONFIG = stores.CONFIG
 SAVED = STATE / "saved.json"  # sha256 of each value already saved -> key name
+META = STATE / "meta.json"  # key name -> when it was saved, where it came from, a note. Never the value.
 IS_WIN = os.name == "nt"
 NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
@@ -116,13 +118,33 @@ def remember(name, value):
     save_json(SAVED, saved)
 
 
-def store(name, value, replace=False, names=None):
+def store(name, value, replace=False, names=None, source=None, note=None):
     names = existing_names() if names is None else names
     if name in names and not replace:
         die(f"{name} is already saved. Add --replace to overwrite it.")
     call(store_now().save, name, value)
     remember(name, value)
     names.add(name)
+    meta = load_json(META, {})
+    old = meta.get(name, {})
+    meta[name] = {k: v for k, v in {
+        "saved": time.strftime("%Y-%m-%d %H:%M"), "hint": mask(value), "kind": known_key_in(value),
+        "from": source, "note": note or old.get("note")}.items() if v}
+    save_json(META, meta)
+
+
+def set_meta(name, **fields):
+    meta = load_json(META, {})
+    meta.setdefault(name, {}).update({k: v for k, v in fields.items() if v})
+    save_json(META, meta)
+
+
+def describe(name, meta=None):
+    """One line about a saved key, for keys list and the note at the start of each session."""
+    m = (load_json(META, {}) if meta is None else meta).get(name, {})
+    bits = [m.get("note"), m.get("kind"), m.get("hint"), m.get("saved") and "saved " + m["saved"][:10],
+            m.get("from")]
+    return "; ".join(b for b in bits if b)
 
 
 def read_value(name):
@@ -285,20 +307,24 @@ def need_approval(names, action):
 def cmd_add(args):
     """Save a key from the clipboard, an environment variable, a pipe, or typed in hidden."""
     from_env = args[args.index("--from-env") + 1] if "--from-env" in args else None
-    rest = [a for i, a in enumerate(args) if not a.startswith("--") and (i == 0 or args[i - 1] != "--from-env")]
+    rest = [a for i, a in enumerate(args)
+            if not a.startswith("--") and (i == 0 or args[i - 1] not in ("--from-env", "--note"))]
     if len(rest) != 1:
-        die("usage: keys add NAME [--clipboard | --from-env VAR] [--replace]   (or pipe the key in)")
+        die('usage: keys add NAME [--clipboard | --from-env VAR] [--note "what it is"] [--replace]'
+            "   (or pipe the key in)")
     name = norm_name(rest[0])
+    note = args[args.index("--note") + 1] if "--note" in args else None
     if "--clipboard" in args:
-        value = read_clipboard()
+        value, source = read_clipboard(), "keys add, from the clipboard"
     elif from_env:
-        value = os.environ.get(from_env, "")
+        value, source = os.environ.get(from_env, ""), f"keys add, from ${from_env}"
         if not value:
             die(f"the environment variable {from_env} is empty.")
     elif sys.stdin.isatty():
-        value = getpass.getpass(f"Paste {name} (it won't show): ")
+        value, source = getpass.getpass(f"Paste {name} (it won't show): "), "keys add, typed in"
     else:
-        value = sys.stdin.read()
+        value, source = sys.stdin.read(), "keys add, piped in"
+    source += f" in {os.getcwd()}"
     value = value.strip()
     if len(value) < 8:
         die("that doesn't look like a key.")
@@ -307,7 +333,7 @@ def cmd_add(args):
         if "--replace" not in args:
             die(f"{name} is already saved. Add --replace to overwrite it (that needs approval).")
         need_approval([name], "replace the saved key")
-    store(name, value, replace=True, names=names)
+    store(name, value, replace=True, names=names, source=source, note=note)
     if "--clipboard" in args:
         clear_clipboard()
     print(f"Saved {name} ({mask(value)}).")
@@ -336,7 +362,7 @@ def cmd_import(args):
             else:
                 if name in names:
                     need_approval([name], f"replace it with the one in {Path(path).name}")
-                store(name, value, replace=True, names=names)
+                store(name, value, replace=True, names=names, source=f"imported from {Path(path).resolve()}")
                 saved[fingerprint(value)] = name
                 print(f"  {name}: saved ({mask(value)})")
     print(f"To use them: keys run NAME -- <command>, or put the lines from keys ref NAME in a .env.tpl file.")
@@ -344,7 +370,22 @@ def cmd_import(args):
 
 def cmd_list(args):
     names = sorted(existing_names())
-    print("\n".join(names) if names else f"No keys yet. Add one with: keys add NAME --clipboard")
+    if not names:
+        print("No keys yet. Add one with: keys add NAME --clipboard")
+    meta = load_json(META, {})
+    for n in names:
+        print(f"{n}\n    {describe(n, meta) or 'no details (saved before keywarden kept them)'}")
+
+
+def cmd_note(args):
+    """keys note NAME "what it is": a note that keys list and each new Claude session show next to the name."""
+    if len(args) < 2:
+        die('usage: keys note NAME "what it is, e.g. GitHub token for the deploy bot, expires March"')
+    name = norm_name(args[0])
+    if name not in existing_names():
+        die(f"there's no saved key called {name}. See keys list.")
+    set_meta(name, note=" ".join(args[1:]).strip())
+    print(f"{name}: {describe(name)}")
 
 
 def cmd_remove(args):
@@ -353,6 +394,7 @@ def cmd_remove(args):
         die("usage: keys remove NAME [NAME ...]")
     need_approval(names, "delete them" if len(names) > 1 else "delete it")
     save_json(SAVED, {k: v for k, v in load_json(SAVED, {}).items() if v not in names})
+    save_json(META, {k: v for k, v in load_json(META, {}).items() if k not in names})
     for n in names:
         call(store_now().delete, n)
         print(f"Removed {n}.")
@@ -545,6 +587,10 @@ def cmd_rename(args):
     call(store_now().rename, old, new)
     saved = load_json(SAVED, {})
     save_json(SAVED, {k: (new if v == old else v) for k, v in saved.items()})
+    meta = load_json(META, {})
+    if old in meta:
+        meta[new] = meta.pop(old)
+        save_json(META, meta)
     print(f"Renamed {old} to {new}.")
 
 
@@ -812,10 +858,17 @@ def key_in(text):
     return None
 
 
-def save_found(found):
+def save_found(found, text="", where=""):
     """Save keys found in a message. A name the person chose replaces a saved key with that name. A name
-    keywarden picked gets _2, _3... if it's taken. Returns [(name, 'saved' | 'replaced' | 'already saved')]."""
+    keywarden picked gets _2, _3... if it's taken. Returns [(name, 'saved' | 'replaced' | 'already saved')].
+    The message, with every key in it swapped for its name, is kept as where the key came from."""
     names, saved, out = existing_names(), load_json(SAVED, {}), []
+    said = text
+    for name, v, _ in found:
+        said = said.replace(v, f"[{norm_name(name)}]")
+    said = " ".join(said.split())
+    said = said[:150] + ("..." if len(said) > 150 else "")
+    source = f'pasted in a Claude chat{" in " + where if where else ""}: "{said}"' if said else "pasted in a Claude chat"
     for name, v, named in found:
         name = norm_name(name)
         if saved.get(fingerprint(v)) in names:
@@ -826,7 +879,7 @@ def save_found(found):
             while name in names:
                 name, i = f"{base}_{i}", i + 1
         out.append((name, "replaced" if name in names else "saved"))
-        store(name, v, replace=True, names=names)
+        store(name, v, replace=True, names=names, source=source)
         saved[fingerprint(v)] = name
     return out
 
@@ -961,7 +1014,12 @@ def cmd_rescue(args):
             name, n = base, 2
             while name in names:
                 name, n = f"{base}_{n}", n + 1
-            store(name, v, names=names)
+            when = info["when"]
+            if when.isdigit():  # Claude's prompt history keeps milliseconds since 1970
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(int(when) / 1000))
+            files = ", ".join(sorted(str(f) for f in info["files"]))
+            store(name, v, names=names, source=f"keys rescue found it in {files}"
+                                              f" ({'you pasted it' if info['typed'] else 'tool output'}, {when[:16]})")
             saved[fp] = name
             print(f"  saved {mask(v)} as {name}")
         skipped = sum(1 for v, i in found.items() if i["label"] == "UNKNOWN_KEY" and fingerprint(v) not in saved)
@@ -1017,7 +1075,7 @@ def cmd_scrub(args):
         scrub_in_place(path, values, start)
 
 
-COMMANDS = {"_scrub": cmd_scrub, "setup": cmd_setup, "switch": cmd_switch, "strict": cmd_strict, "approvals": cmd_approvals,
+COMMANDS = {"_scrub": cmd_scrub, "note": cmd_note, "setup": cmd_setup, "switch": cmd_switch, "strict": cmd_strict, "approvals": cmd_approvals,
             "protect": cmd_protect, "unprotect": cmd_unprotect, "phone": cmd_phone, "remove": cmd_remove, "lock": cmd_lock, "grant": cmd_grant, "status": cmd_status, "env": cmd_env, "add": cmd_add, "import": cmd_import, "list": cmd_list, "rename": cmd_rename, "ref": cmd_ref,
             "run": cmd_run, "rescue": cmd_rescue}
 

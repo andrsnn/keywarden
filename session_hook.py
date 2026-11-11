@@ -14,11 +14,15 @@ def main():
         import keys
         names = sorted(keys.existing_names())
         granted = sorted(approve.grants())
+        meta = keys.load_json(keys.META, {})
     except BaseException:
         sys.exit(0)
     if not names:
         sys.exit(0)
-    text = (f"keywarden has these keys saved: {', '.join(names)}. When a task needs a key, use one of these "
+    # Each name with its note or kind, so Claude can tell which key a task needs.
+    listed = [n + (f" ({meta[n].get('note') or meta[n].get('kind')})"
+                   if n in meta and (meta[n].get("note") or meta[n].get("kind")) else "") for n in names]
+    text = (f"keywarden has these keys saved: {', '.join(listed)}. When a task needs a key, use one of these "
             "before saying you don't have it: run keys grant NAME --for \"why\", then use \"$NAME\" in commands. "
             "Load the keywarden skill for the details.")
     if granted:

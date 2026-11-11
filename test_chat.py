@@ -58,6 +58,28 @@ try:
     expect("no drops the request", "said no to CLOUDFRONT_KEY" in out)
     expect("approve after no does nothing", "additionalContext" not in say("yes"))
     expect("still no grant", not handed_over())
+
+    tid = "b7e1c90d42a6f3815"
+    notice = (f"<task-notification>\n<task-id>{tid}</task-id>\n<output-file>C:\\AI\\cache\\tmp\\claude\\"
+              f"c3d9e8f71a2b4c5d\\9a8b7c6d-1e2f-4a5b-8c7d-6e5f4a3b2c1d\\tasks\\{tid}.output</output-file>\n"
+              "<summary>Save the files and store this</summary></task-notification>")
+    expect("Claude Code's own notices aren't saved or stopped", '"block"' not in say(notice)
+           and "TASK_ID" not in run("keys.py", "list")[1])
+
+    # Details kept about each key: where it came from, never the value.
+    meta = json.loads((tmp / "meta.json").read_text())
+    m = meta.get("CLOUDFRONT_KEY", {})
+    expect("details say where a pasted key came from",
+           "pasted in a Claude chat" in m.get("from", "") and "[CLOUDFRONT_KEY]" in m.get("from", "")
+           and "K2JCJMDEHXQW5F" not in json.dumps(meta) and m.get("saved") and m.get("hint"))
+    run("keys.py", "note", "CLOUDFRONT_KEY", "signing key for the CDN")
+    out = run("keys.py", "list")[1]
+    expect("keys list shows the note and the source", "signing key for the CDN" in out and "pasted in" in out)
+    expect("new sessions see the note", "signing key for the CDN" in run("session_hook.py")[1])
+    run("keys.py", "add", "OTHER_TOKEN", "--note", "a second key", stdin="ot_" + "x7Qp2" * 6)
+    m = json.loads((tmp / "meta.json").read_text()).get("OTHER_TOKEN", {})
+    expect("keys add keeps a note and how it was added", m.get("note") == "a second key"
+           and m.get("from", "").startswith("keys add, piped in"))
 finally:
     sys.path.insert(0, str(HERE))
     os.environ.update(AGENT_KEYS_NS="agent-keys-chattest", AGENT_KEYS_STATE=str(tmp))
