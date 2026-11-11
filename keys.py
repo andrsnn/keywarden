@@ -808,6 +808,8 @@ def find_keys(text):
         add(as_name.group(1) if as_name else "PRIVATE_KEY", m.group(0).strip(), bool(as_name), m.span())
     for m in PAIR.finditer(text):
         name, v = m.group(1), m.group(2)
+        if name.lower() in STOP:  # "save this: KEY" names nothing, so the words before it pick the name
+            continue
         if (asked or SECRET_NAME.search(name)) and _raw_ok(v) and not v.isdigit() and len(v) >= 12:
             add(name, v, True, m.span(2))
     for m in KNOWN.finditer(orig):

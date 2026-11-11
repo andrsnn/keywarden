@@ -24,6 +24,8 @@ FOUND = [  # (message, the names it saves)
     ("key cloudfront_key " + plain, ["CLOUDFRONT_KEY"]),
     ("  key R2_ACCESS_KEY_ID " + r2_id + "\nkey R2_SECRET " + r2_secret, ["R2_ACCESS_KEY_ID", "R2_SECRET"]),
     ("key PIN hunter2", ["PIN"]),
+    ("here is my weather api key, save this: " + plain, ["WEATHER_API_KEY"]),
+    ("save it: " + plain, ["SAVED_KEY"]),
     ("key CLOUDFRONT_PRIVATE_KEY\n" + pem, ["CLOUDFRONT_PRIVATE_KEY"]),
     # "save this"
     ("save this cloudfront key K2JCJMDEHXQW5F", ["CLOUDFRONT_KEY"]),
