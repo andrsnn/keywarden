@@ -33,14 +33,40 @@ python install.py
 keys setup
 ```
 
-Keys go in 1Password if its app is connected. Otherwise they go in Windows Credential Manager or the Mac Keychain.
+`install.py` also installs the 1Password command line tool if winget (Windows) or Homebrew (Mac) is there.
+
+## Where your keys are stored
+
+keywarden keeps keys in one of two places. `keys setup` picks 1Password if it's connected, and your computer's key store if not. Run it again at any time to see or change the choice.
+
+**1Password (preferred).** Your keys sync to your other devices and sit in a vault you can see in the 1Password app.
+
+1. Install the 1Password app and sign in.
+2. In the app, open Settings, then Developer, and turn on "Integrate with 1Password CLI".
+3. Run `keys setup 1password`. keywarden makes a vault called "Agent Keys". To use a different vault, run `keys setup 1password "Vault Name"`.
+
+On a computer that runs without you at it, like a server, use a 1Password service account. Save its token with `keys add OP_SERVICE_ACCOUNT_TOKEN --clipboard`, then run `keys setup 1password`.
+
+**Your computer's key store.** On Windows that's Credential Manager, and on a Mac it's the Keychain. Nothing to install. Run `keys setup local`. On Linux, use 1Password, because this option only works on Windows and Mac.
+
+**Moving between them.** `keys switch 1password` copies every key into 1Password and uses it from then on. `keys switch local` goes the other way. Copying needs your approval. The old copies stay where they were until you delete them, so you can check the new store first.
+
+**Strict mode (1Password only).** Normally, once you approve a key, keywarden keeps a copy in your computer's key store until the grant ends. `keys strict on` turns that off. Every time a command needs a key, keywarden reads it fresh from 1Password, and 1Password asks for your fingerprint or face. Turning strict mode off needs your approval.
+
+## How you approve
+
+- **In the chat (default).** Claude asks, and you reply approve, approve 1h, or no. Set it with `keys approvals chat`.
+- **On your phone.** Run `keys phone` and open the link it prints on your phone. It works over Tailscale and approves with Face ID. Then `keys approvals phone` sends every request to your phone, or `keys protect NAME` does it for one key only.
+- **No question.** `keys approvals off` gives a grant without asking. Changing to this needs your approval.
 
 ## Commands
 
 ```
-keys list                       names of saved keys
+keys list                       saved keys, with what each is and where it came from
 keys add NAME --clipboard       save the key you copied
+keys note NAME "what it is"     add a note that you and Claude see in the list
 keys grant NAME --for "why"     give Claude a key for 12 hours
 keys status                     which keys have a grant
-keys lock                       end every grant now
+keys lock [NAME]                end a grant now, or every grant
+keys setup                      see or change where keys are stored
 ```
