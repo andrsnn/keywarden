@@ -137,7 +137,13 @@ def main():
 
 def wrap(tool, cmd):
     if tool == "Bash":
-        return (f'eval "$({KEYS} env)"; {{ {cmd}\n}} > >({MASK}) 2> >({MASK} >&2)')
+        # The filters run as process substitutions on fds 8 and 9. After the command, close them and wait up to
+        # 5 seconds for the filters to finish writing, or Bash returns before the output arrives. A background job
+        # the command started can keep a filter open, so the wait has a limit instead of using `wait`.
+        return (f'eval "$({KEYS} env)"; exec 8> >({MASK}); __kw1=$!; exec 9> >({MASK} >&2); __kw2=$!; '
+                f'{{ {cmd}\n}} >&8 2>&9; __kws=$?; exec 8>&- 9>&-; __kwi=0; '
+                'while { kill -0 $__kw1 || kill -0 $__kw2; } 2>/dev/null && [ $__kwi -lt 50 ]; '
+                'do sleep 0.1; __kwi=$((__kwi+1)); done; (exit $__kws)')
     ps_keys, ps_mask = KEYS.replace('"', "'"), MASK.replace('"', "'")
     return (f"& {ps_keys} env --ps | Out-String | Invoke-Expression; "
             f"& {{ {cmd}\n}} 2>&1 | ForEach-Object {{ \"$_\" }} | & {ps_mask}")
