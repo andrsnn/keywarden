@@ -22,7 +22,11 @@ TIME = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d
 
 
 def block(reason):
-    print(json.dumps({"decision": "block", "reason": reason}))
+    # Claude Code shows this under "UserPromptSubmit operation blocked by hook", so the reason has to say the
+    # save worked. suppressOriginalPrompt stops it repeating the message, key and all, as "Original prompt".
+    # Claude Code still puts the message back in the input box, so the reason says how to clear it.
+    print(json.dumps({"decision": "block", "reason": reason,
+                      "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "suppressOriginalPrompt": True}}))
     sys.exit(0)
 
 
@@ -80,10 +84,11 @@ def main():
             scrub_later(data.get("transcript_path"), [v for _, v, _ in found])
         except BaseException:
             pass
-        words = {"saved": "Saved", "replaced": "Replaced the old", "already saved": "Already had"}
+        words = {"saved": "Saved your key as", "replaced": "Replaced the old", "already saved": "Already had"}
         done = ". ".join(f"{words[how]} {name}" for name, how in results)
-        block(f"{done}. Your message wasn't sent, so the key never reached Claude. Now ask Claude to use "
-              f"{results[0][0]}. To change the name, ask Claude to rename it.")
+        block(f"{done}. This is keywarden working, not an error: it held your message back on purpose, so "
+              f"Claude never saw the key. Press Ctrl+C to clear the key from the input box, then ask Claude to "
+              f"use {results[0][0]}. To change the name, ask Claude to rename it.")
     try:
         import approve
         if len(text) <= 80 and approve.pending():

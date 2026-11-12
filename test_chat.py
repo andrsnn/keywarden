@@ -36,8 +36,10 @@ def expect(name, cond):
 try:
     run("keys.py", "setup", "local")
     out = say("save this cloudfront key K2JCJMDEHXQW5F")
-    expect("save this saves and stops the message", '"block"' in out and "Saved CLOUDFRONT_KEY" in out
+    expect("save this saves and stops the message", '"block"' in out and "Saved your key as CLOUDFRONT_KEY" in out
            and "K2JC" not in out)
+    expect("the message says the save worked", "not an error" in out)
+    expect("Claude Code is told not to show the message again", '"suppressOriginalPrompt": true' in out)
     expect("the key is in the store", "CLOUDFRONT_KEY" in run("keys.py", "list")[1])
     out = run("session_hook.py")[1]
     expect("new sessions are told the key names", "CLOUDFRONT_KEY" in out and "K2JC" not in out)
