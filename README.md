@@ -9,14 +9,14 @@ It fixes two problems:
 
 ## How it works
 
-1. **You paste a key into Claude and say "save this".** keywarden saves it before Claude sees it and tells you the name it used. If it spots a known kind of key (`sk-`, `ghp_`, `AKIA`, a private key) without "save this", it saves it anyway and tells you. To pick the name, send `key NAME value` instead.
+1. **You paste a key into Claude and say "save this".** keywarden saves the key, puts its name in your message where the key was, and sends the message on. Claude sees `save this: [WEATHER_API_KEY]` and carries on with what you asked. If keywarden spots a known kind of key (`sk-`, `ghp_`, `AKIA`, a private key) without "save this", it saves it anyway. To pick the name, send `key NAME value` instead.
 2. **Claude looks in keywarden first.** Every Claude session starts with a list of the saved key names, so Claude uses one of those before saying it doesn't have a key.
 3. **Claude asks for access.** If the key already has a grant, Claude gets it. If not, Claude asks you in the chat, and you reply approve (or approve 1h) to create a grant. A grant lasts 12 hours unless you say otherwise. With a grant, every command Claude runs has the key as `$NAME`, and Claude never sees the value.
 
 ## How it keeps your keys safe
 
 - **Keys never sit in a file.** They're stored in 1Password or your computer's key store (Windows Credential Manager or the Mac Keychain), which encrypt them on disk. keywarden never writes a key to a `.env` file, a script or a log.
-- **A pasted key never reaches Claude.** keywarden adds a hook to Claude Code that reads each message before Claude does. When it finds a key, it saves the key and stops the message, so the key is never sent to the model provider. Claude Code still writes the stopped message into the session's log file, so keywarden overwrites the key there with asterisks a second later.
+- **A pasted key never reaches Claude.** keywarden's Claude Code plugin reads each message before Claude does. When it finds a key, it saves the key and replaces it with the key's name, so the key is never sent to the model provider or written to Claude's logs. If the plugin isn't loaded, a second hook stops any message that still has a key in it, and you send it again without the key.
 - **Only you can approve.** When Claude asks for a key, the request waits until you reply approve. That reply goes through the same hook, which only sees messages you type, so Claude can't approve itself. Any other agent can ask with `keys grant` or `keys run NAME -- command`, and you approve it the same way. A grant only covers the keys you approved, and it ends after 12 hours, or sooner with `keys lock`.
 - **Claude uses keys without seeing them.** While a key has a grant, a second hook puts the key into each command Claude runs as `$NAME`. If a command prints a key, the hook replaces it with `<concealed by keywarden>` before Claude reads the output.
 - **Claude can't copy a key out.** The second hook blocks commands that would show a key, like `echo $OPENAI_API_KEY`, `printenv` or `cat .env`. It also stops Claude from writing a key into a file or a command, and from editing keywarden's own files or removing its hooks.
@@ -33,7 +33,7 @@ python install.py
 keys setup
 ```
 
-`install.py` also installs the 1Password command line tool if winget (Windows) or Homebrew (Mac) is there.
+`install.py` adds keywarden's hooks and its Claude Code plugin. It also installs the 1Password command line tool if winget (Windows) or Homebrew (Mac) is there.
 
 ## Where your keys are stored
 

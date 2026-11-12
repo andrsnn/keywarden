@@ -1,0 +1,5 @@
+{
+  "name": "keywarden",
+  "version": "0.2.0",
+  "description": "Saves an API key you paste into Claude Code and swaps it for its name before Claude sees it."
+}

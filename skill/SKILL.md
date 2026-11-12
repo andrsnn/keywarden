@@ -31,7 +31,7 @@ To run one program with only a few keys, use `keys run NAME1 NAME2 -- command`. 
 - `keys add` confirms with the first 4 characters and the length. That's all you ever see.
 
 ## Keys from the person
-- The person gives you a key by pasting it and saying "save this", or with `key NAME value`. A hook saves it and stops that message before you see it, and tells them the name. A key in a well-known format (sk-..., ghp_..., AKIA..., a private key block) is saved even without "save this". Then they ask you to use it. Run `keys list` to see the names, and `keys rename OLD NEW` if they want a different name.
+- The person gives you a key by pasting it and saying "save this", or with `key NAME value`. keywarden saves it before you see it and puts its name where the key was, so their message reaches you as `save this: [NAME]` with a note saying it's saved. A key in a well-known format (sk-..., ghp_..., AKIA..., a private key block) is saved even without "save this". Carry on with what they asked, using the key by name. Run `keys list` to see the names, and `keys rename OLD NEW` if they want a different name.
 - At the start of every session a note lists the saved key names. Check them before saying you don't have a key.
 - The hook also stops you from writing a saved key, or anything shaped like a key, into a file or a command. Use `"$NAME"` instead. If code needs a key, read it from the environment, like `os.environ["NAME"]`.
 

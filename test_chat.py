@@ -82,6 +82,16 @@ try:
     m = json.loads((tmp / "meta.json").read_text()).get("OTHER_TOKEN", {})
     expect("keys add keeps a note and how it was added", m.get("note") == "a second key"
            and m.get("from", "").startswith("keys add, piped in"))
+
+    # The Claude Code plugin's path: save the key, swap it for [NAME], let the message go on.
+    msg = "here is my maps api key, save this: mp_" + "Zq81x" * 6 + " and get the map tiles"
+    out = json.loads(run("prompt_hook.py", "--rewrite", stdin=json.dumps({"prompt": msg}))[1])
+    expect("rewrite swaps the key for its name", out.get("text") == "here is my maps api key, save this: "
+           "[MAPS_API_KEY] and get the map tiles" and out.get("saved") == [["MAPS_API_KEY", "saved"]])
+    expect("rewrite saves the key", "MAPS_API_KEY" in run("keys.py", "list")[1])
+    expect("the rewritten message passes the settings hook", '"block"' not in say(out["text"]))
+    out = json.loads(run("prompt_hook.py", "--rewrite", stdin=json.dumps({"prompt": "fix the bug in a.ts"}))[1])
+    expect("rewrite leaves a message with no key alone", out == {"text": "fix the bug in a.ts", "saved": []})
 finally:
     sys.path.insert(0, str(HERE))
     os.environ.update(AGENT_KEYS_NS="agent-keys-chattest", AGENT_KEYS_STATE=str(tmp))

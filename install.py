@@ -70,6 +70,23 @@ def install_op():
     subprocess.run(cmd)
 
 
+def claude(*args):
+    exe = shutil.which("claude")
+    return exe and subprocess.run([exe, *args], capture_output=True, text=True).returncode == 0
+
+
+def install_plugin():
+    """The Claude Code plugin swaps a pasted key for its name and lets the message through. Without it, the
+    UserPromptSubmit hook stops any message with a key in it."""
+    (REPO / "hooks" / "python-path.txt").write_text(PY + "\n", encoding="utf-8")
+    claude("plugin", "marketplace", "add", str(REPO))
+    if claude("plugin", "install", "keywarden@keywarden", "--scope", "user"):
+        say("Claude plugin: installed (a pasted key is swapped for its name, and your message still goes through)")
+    else:
+        say("Claude plugin: not installed. Run  claude plugin marketplace add " + str(REPO) +
+            "  and then  claude plugin install keywarden@keywarden")
+
+
 def install():
     print("Installing keywarden")
     install_op()
@@ -123,6 +140,7 @@ def install():
         {"hooks": [{"type": "command", "command": f'"{PY}" "{(REPO / "session_hook.py").as_posix()}"'}]})
     write_settings(d)
     say(f"Claude hook: added to {SETTINGS}")
+    install_plugin()
 
     print("\nNext: run  keys setup  to keep keys on this computer, or  keys setup 1password  to use 1Password.")
     print("Then run  keys phone  to approve key use from your phone.")
@@ -136,7 +154,8 @@ def uninstall():
     shutil.rmtree(OLD_SKILL, ignore_errors=True)
     if SETTINGS.exists():
         write_settings(drop_our_hook(load_settings()))
-    say("removed the command, skill and hook. Your keys stay in 1Password.")
+    claude("plugin", "uninstall", "keywarden@keywarden")
+    say("removed the command, skill, hook and plugin. Your keys stay in 1Password.")
 
 
 if __name__ == "__main__":

@@ -65,7 +65,34 @@ def scrub_later(transcript, values):
     p.stdin.close()
 
 
+def rewrite():
+    """Called by keywarden's Claude Code plugin (hooks/register.ts) before Claude Code's own hooks run. Saves any
+    key in the message and swaps it for [NAME], so the message still goes to Claude, just without the key.
+    Prints {"text", "saved": [[name, how]]}, or {"drop": reason} if a key couldn't be saved."""
+    import keys
+    data = json.load(sys.stdin)
+    text = data.get("prompt") or ""
+    found = [] if text.lstrip().startswith(NOTICES) else keys.find_keys(text)
+    if not found:
+        print(json.dumps({"text": text, "saved": []}))
+        return
+    try:
+        results = keys.save_found(found, text, data.get("cwd") or "")
+    except BaseException as e:  # keys.die() raises SystemExit
+        print(json.dumps({"drop": f"keywarden couldn't save the key ({e}). Your message wasn't sent."}))
+        return
+    for (_, value, _), (name, _) in zip(found, results):
+        text = text.replace(value, f"[{name}]")
+    if keys.find_keys(text):  # a key is still in there: don't send it
+        print(json.dumps({"drop": "keywarden saved the key but couldn't take it out of your message, so it "
+                                  "wasn't sent. Ask Claude to use " + results[0][0] + "."}))
+        return
+    print(json.dumps({"text": text, "saved": [list(r) for r in results]}))
+
+
 def main():
+    if sys.argv[1:] == ["--rewrite"]:
+        return rewrite()
     try:
         data = json.load(sys.stdin)
         text = data.get("prompt") or ""
