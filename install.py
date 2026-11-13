@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Install keywarden for Claude Code.
+"""Install keywarden for Claude Code and local Codex.
 
   python install.py              install, or update after a git pull
   python install.py --uninstall  remove the command, skill and hook
 """
+import argparse
 import json
 import os
 import shutil
@@ -17,6 +18,8 @@ BIN = HOME / ".local" / "bin"
 SKILL = HOME / ".claude" / "skills" / "keywarden"
 OLD_SKILL = HOME / ".claude" / "skills" / "agent-keys"  # the name before keywarden
 SETTINGS = HOME / ".claude" / "settings.json"
+CODEX_HOOKS = Path(os.environ.get("CODEX_HOME") or HOME / ".codex") / "hooks.json"
+CODEX_SKILL = HOME / ".agents" / "skills" / "keywarden"
 IS_WIN = os.name == "nt"
 PY = Path(sys.executable).as_posix()
 HOOK_CMD = f'"{PY}" "{(REPO / "hook.py").as_posix()}"'
@@ -27,27 +30,33 @@ def say(msg):
     print(f"  {msg}")
 
 
-def load_settings():
-    if not SETTINGS.exists():
+def load_settings(path=None):
+    path = path or SETTINGS
+    if not path.exists():
         return {}
-    return json.loads(SETTINGS.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def write_settings(d):
-    if SETTINGS.exists():
-        shutil.copy2(SETTINGS, SETTINGS.with_name("settings.json.bak-agent-keys"))
-    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+def write_settings(d, path=None):
+    path = path or SETTINGS
+    if path.exists():
+        shutil.copy2(path, path.with_name(path.name + ".bak-agent-keys"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
 
 
 def drop_our_hook(d):
+    def ours(h):
+        command = h.get("command", "")
+        return "hook.py" in command and any(part in command for part in (REPO.as_posix(), "agent-keys", "keywarden"))
+
     for event in ("PreToolUse", "UserPromptSubmit", "SessionStart"):
         groups = d.get("hooks", {}).get(event, [])
-        keep = [g for g in groups if not any(
-            str(REPO.as_posix()) in h.get("command", "") or
-            (("agent-keys" in h.get("command", "") or "keywarden" in h.get("command", ""))
-             and "hook.py" in h.get("command", ""))
-            for h in g.get("hooks", []))]
+        keep = []
+        for g in groups:
+            handlers = [h for h in g.get("hooks", []) if not ours(h)]
+            if handlers:
+                keep.append(dict(g, hooks=handlers))
         if groups:
             d["hooks"][event] = keep
     return d
@@ -87,7 +96,7 @@ def install_plugin():
             "  and then  claude plugin install keywarden@keywarden")
 
 
-def install():
+def install(agent="both"):
     print("Installing keywarden")
     install_op()
 
@@ -126,6 +135,16 @@ def install():
         else:
             say("Touch ID: run  xcode-select --install  and then run install.py again")
 
+    if agent in ("both", "claude"):
+        install_claude()
+    if agent in ("both", "codex"):
+        install_codex()
+
+    print("\nNext: run  keys setup  to keep keys on this computer, or  keys setup 1password  to use 1Password.")
+    print("Then run  keys phone  to approve key use from your phone.")
+
+
+def install_claude():
     shutil.rmtree(OLD_SKILL, ignore_errors=True)
     SKILL.mkdir(parents=True, exist_ok=True)
     shutil.copy2(REPO / "skill" / "SKILL.md", SKILL / "SKILL.md")
@@ -142,21 +161,45 @@ def install():
     say(f"Claude hook: added to {SETTINGS}")
     install_plugin()
 
-    print("\nNext: run  keys setup  to keep keys on this computer, or  keys setup 1password  to use 1Password.")
-    print("Then run  keys phone  to approve key use from your phone.")
+
+def install_codex():
+    CODEX_SKILL.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(REPO / "skill" / "SKILL.md", CODEX_SKILL / "SKILL.md")
+    say(f"Codex skill: {CODEX_SKILL}")
+    d = drop_our_hook(load_settings(CODEX_HOOKS))
+    for event, script in (("PreToolUse", "hook.py"), ("UserPromptSubmit", "prompt_hook.py"),
+                          ("SessionStart", "session_hook.py")):
+        group = {"hooks": [{"type": "command", "command": f'"{PY}" "{(REPO / script).as_posix()}" --codex'}]}
+        if event == "PreToolUse":
+            group["matcher"] = MATCHER + "|apply_patch"
+        d.setdefault("hooks", {}).setdefault(event, []).append(group)
+    write_settings(d, CODEX_HOOKS)
+    say(f"Codex hooks: added to {CODEX_HOOKS}")
+    say("Codex: restart, then review and trust keywarden in /hooks (desktop: Settings > Hooks).")
+    say("Codex: pasted keys are saved and the message is blocked. Resend using the saved name.")
 
 
-def uninstall():
+def uninstall(agent="both"):
     print("Removing keywarden")
-    for f in (BIN / "keys", BIN / "keys.cmd"):
-        f.unlink(missing_ok=True)
-    shutil.rmtree(SKILL, ignore_errors=True)
-    shutil.rmtree(OLD_SKILL, ignore_errors=True)
-    if SETTINGS.exists():
-        write_settings(drop_our_hook(load_settings()))
-    claude("plugin", "uninstall", "keywarden@keywarden")
-    say("removed the command, skill, hook and plugin. Your keys stay in 1Password.")
+    if agent == "both":
+        for f in (BIN / "keys", BIN / "keys.cmd"):
+            f.unlink(missing_ok=True)
+    if agent in ("both", "claude"):
+        shutil.rmtree(SKILL, ignore_errors=True)
+        shutil.rmtree(OLD_SKILL, ignore_errors=True)
+        if SETTINGS.exists():
+            write_settings(drop_our_hook(load_settings()))
+        claude("plugin", "uninstall", "keywarden@keywarden")
+    if agent in ("both", "codex"):
+        shutil.rmtree(CODEX_SKILL, ignore_errors=True)
+        if CODEX_HOOKS.exists():
+            write_settings(drop_our_hook(load_settings(CODEX_HOOKS)), CODEX_HOOKS)
+    say("removed the selected integrations. Your saved keys are unchanged.")
 
 
 if __name__ == "__main__":
-    uninstall() if "--uninstall" in sys.argv else install()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--agent", choices=("both", "claude", "codex"), default="both")
+    parser.add_argument("--uninstall", action="store_true")
+    args = parser.parse_args()
+    uninstall(args.agent) if args.uninstall else install(args.agent)

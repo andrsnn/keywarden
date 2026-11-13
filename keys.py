@@ -742,19 +742,21 @@ def plausible(v):
 #      NAME=value, "as NAME", the words before the key ("save this cloudfront key K2J...") or the key's format.
 #   3. A key in a well-known format (sk-..., ghp_..., AKIA..., a private key block) or NAME_KEY=value, with no
 #      "save". It's saved under the format's name.
+#   4. A long value described nearby as a key, token, secret, password or credential.
 KEY_LINE = re.compile(r"(?m)^[ \t]*key[ \t]+([A-Za-z][A-Za-z0-9_]{1,})[ \t]+(\S+)[ \t]*$")
 KEY_NAME_LINE = re.compile(r"(?m)^[ \t]*key[ \t]+([A-Za-z][A-Za-z0-9_]{1,})[ \t]*$")
 PEM = re.compile(r"-----BEGIN ([A-Z ]*)PRIVATE KEY-----[\s\S]+?-----END \1PRIVATE KEY-----")
 TOKEN = re.compile(r"[A-Za-z0-9_\-+/=.:]{12,}")
 SAVE_WORDS = re.compile(r"(?i)\b(?:save|store)\s+(?:this|it|these|that|them|my|as)\b"
-                        r"|\b(?:save|store)\b[^\n]{0,40}?\b(?:key|token|secret|password|pat)s?\b")
+                        r"|\b(?:save|store)\b[^\n]{0,40}?\b(?:key|token|secret|password|credential|pat)s?\b")
+KEY_WORDS = re.compile(r"(?i)\b(?:key|token|secret|password|credential)s?\b")
 PAIR = re.compile(r"(?m)(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_]{1,})[ \t]*[=:][ \t]*[\"']?([^\s\"']{8,})[\"']?")
 SECRET_NAME = re.compile(r"(?i)(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PAT|CREDENTIALS?)$")
 AS_NAME = re.compile(r"\b[Aa]s\s+([A-Z][A-Z0-9_]+|[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)\b")
-RAW = re.compile(r"(?<![A-Za-z0-9_\-+/=])[A-Za-z0-9_\-+/=]{12,}(?![A-Za-z0-9_\-+/=.])")
+RAW = re.compile(r"(?<![A-Za-z0-9_\-+/=.\\])[A-Za-z0-9_\-+/=]{12,}(?![A-Za-z0-9_\-+/=.\\])")
 IDENT = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
 STOP = set("save store keep add put this it these that them my the a an is are here as for please plz pls and "
-           "to of in on new it's its me can you i".split())
+           "to of in on new it's its me can you i here's use".split())
 
 
 def _raw_ok(v):
@@ -766,10 +768,15 @@ def _raw_ok(v):
 
 def _name_before(text, at):
     """A name from the words just before a key: "save this cloudfront key K2J..." gives CLOUDFRONT_KEY."""
-    line = text[text.rfind("\n", 0, at) + 1:at]
-    words = re.findall(r"[A-Za-z][A-Za-z0-9_]*", line)
+    line = re.split(r"[\n.!?;]", text[:at])[-1]
+    words = re.findall(r"[A-Za-z][A-Za-z0-9_]*(?:'[A-Za-z]+)?", line)
     if words and IDENT.match(words[-1]):
         return words[-1]
+    # "key for the weather api" and "password for the db" put the service after the kind of key.
+    for i, w in enumerate(words):
+        if KEY_WORDS.fullmatch(w) and i + 1 < len(words) and words[i + 1].lower() == "for":
+            words = words[i + 2:] + [w]
+            break
     words = [w for w in words if w.lower() not in STOP][-5:]
     if not words:
         return None
@@ -794,6 +801,8 @@ def find_keys(text):
         found.append((norm_name(name), value, named))
 
     for m in KEY_LINE.finditer(text):
+        if re.fullmatch(r"\[[A-Z][A-Z0-9_]*\]", m.group(2)):
+            continue  # A name inserted by the prompt-replacement plugin, not another value to save.
         add(m.group(1), m.group(2), True, m.span(2))
     for m in KEY_NAME_LINE.finditer(text):
         rest = text[m.end():]
@@ -811,7 +820,10 @@ def find_keys(text):
         if name.lower() in STOP:  # "save this: KEY" names nothing, so the words before it pick the name
             continue
         if (asked or SECRET_NAME.search(name)) and _raw_ok(v) and not v.isdigit() and len(v) >= 12:
-            add(name, v, True, m.span(2))
+            if KEY_WORDS.fullmatch(name):
+                add(_name_before(text, m.start(2)) or name, v, False, m.span(2))
+            else:
+                add(name, v, True, m.span(2))
     for m in KNOWN.finditer(orig):
         if plausible(m.group(0)):
             fmt = PATTERNS[int(m.lastgroup[1:])][0]
@@ -819,16 +831,18 @@ def find_keys(text):
                 add(as_name.group(1), m.group(0), True, m.span())
             else:
                 add(fmt, m.group(0), False, m.span())
-    if asked:
-        for m in RAW.finditer(text):
-            v = m.group(0)
-            if _raw_ok(v):
-                if as_name:
-                    add(as_name.group(1), v, True, m.span())
-                    as_name = None
-                else:
-                    name = _name_before(text, m.start())
-                    add(name or "SAVED_KEY", v, False, m.span())
+    for m in RAW.finditer(text):
+        v = m.group(0)
+        before = re.split(r"[\n.!?;]", text[max(0, m.start() - 80):m.start()])[-1]
+        described = (KEY_WORDS.search(before) and len(v) >= 32
+                     and not re.fullmatch(r"[A-Fa-f0-9]+|[A-Fa-f0-9-]{36}", v))
+        if (asked or described) and _raw_ok(v):
+            if as_name:
+                add(as_name.group(1), v, True, m.span())
+                as_name = None
+            else:
+                name = _name_before(text, m.start())
+                add(name or "SAVED_KEY", v, False, m.span())
     return found
 
 
@@ -860,7 +874,7 @@ def key_in(text):
     return None
 
 
-def save_found(found, text="", where=""):
+def save_found(found, text="", where="", agent="Claude"):
     """Save keys found in a message. A name the person chose replaces a saved key with that name. A name
     keywarden picked gets _2, _3... if it's taken. Returns [(name, 'saved' | 'replaced' | 'already saved')].
     The message, with every key in it swapped for its name, is kept as where the key came from."""
@@ -870,7 +884,7 @@ def save_found(found, text="", where=""):
         said = said.replace(v, f"[{norm_name(name)}]")
     said = " ".join(said.split())
     said = said[:150] + ("..." if len(said) > 150 else "")
-    source = f'pasted in a Claude chat{" in " + where if where else ""}: "{said}"' if said else "pasted in a Claude chat"
+    source = f'pasted in a {agent} chat{" in " + where if where else ""}: "{said}"' if said else f"pasted in a {agent} chat"
     for name, v, named in found:
         name = norm_name(name)
         if saved.get(fingerprint(v)) in names:

@@ -19,7 +19,7 @@ You work with key names like `CLOUDFLARE_API_TOKEN`. You never handle the values
    - Write a tool's config file only when the tool can't read the key any other way, and never inside a git repo.
 4. Ask for all the keys a task needs in one `keys grant`, so the person approves once.
 
-To run one program with only a few keys, use `keys run NAME1 NAME2 -- command`. It asks for approval if none is active.
+To pass selected keys explicitly to one program, use `keys run NAME1 NAME2 -- command`. It asks for approval if none is active. Like other commands, it also inherits any keys already in its parent environment.
 
 ## To save a key
 - Save every key you create or receive (an API token you made, a key in a tool's output, a key in a `.env` file) right away, so other agents can use it. Name it in capitals, like `CLOUDFLARE_API_TOKEN`.
@@ -31,7 +31,10 @@ To run one program with only a few keys, use `keys run NAME1 NAME2 -- command`. 
 - `keys add` confirms with the first 4 characters and the length. That's all you ever see.
 
 ## Keys from the person
-- The person gives you a key by pasting it and saying "save this", or with `key NAME value`. keywarden saves it before you see it and puts its name where the key was, so their message reaches you as `save this: [NAME]` with a note saying it's saved. A key in a well-known format (sk-..., ghp_..., AKIA..., a private key block) is saved even without "save this". Carry on with what they asked, using the key by name. Run `keys list` to see the names, and `keys rename OLD NEW` if they want a different name.
+- Prefer `keys add NAME --clipboard` for both Claude Code and local Codex. The value stays out of the chat.
+- In Claude Code with the plugin loaded, a pasted key is saved and replaced with `[NAME]` before you see it. Carry on with their request using the saved name.
+- In Codex, or Claude Code without the plugin, the prompt hook saves a detected key and blocks the message. The person clears the value from the input and resends their request using the saved name. Don't claim Codex rewrites messages.
+- Detection recognizes save requests, `key NAME value`, and well-known formats such as sk-..., ghp_..., AKIA..., and private key blocks. Run `keys list` to see the names, and `keys rename OLD NEW` if they want a different name.
 - At the start of every session a note lists the saved key names. Check them before saying you don't have a key.
 - The hook also stops you from writing a saved key, or anything shaped like a key, into a file or a command. Use `"$NAME"` instead. If code needs a key, read it from the environment, like `os.environ["NAME"]`.
 
@@ -43,3 +46,4 @@ To run one program with only a few keys, use `keys run NAME1 NAME2 -- command`. 
 - A hook blocks `printenv`, `env`, `echo $..._KEY`, `cat .env`, reading `.secrets`, reading the key store directly and `keys env`. If a command is blocked, find a way to pass the key by name. Don't look for a way around the block.
 - If they deny the request, stop and ask what they want. Don't ask again in a loop.
 - If `keys` says nobody approved and no phone is set up, tell them to run `keys phone`.
+- These hooks run in local Claude Code and Codex sessions after installation and, for Codex, hook trust review. They do not provide key injection or chat approval in a cloud session without the local hooks. Use `keys run NAME -- command` when a command runs outside the hooked shell.

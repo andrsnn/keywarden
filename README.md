@@ -1,72 +1,144 @@
 # keywarden
 
-keywarden keeps your API keys in one place so Claude can use them.
+API keys pasted into coding agents can end up in chat history, logs, and committed files. **keywarden keeps keys in encrypted storage and gives approved programs access by name.**
 
-It fixes two problems:
+Works with **Claude Code** and **local Codex**.
 
-1. Claude copies keys you paste into its chat logs, `.env` files and scripts all over your disk.
-2. Claude says it doesn't have a key when it does. It forgot where it put it.
+<p align="center"><img src="docs/how-it-works.svg" alt="Save a key in encrypted storage, approve access, and let Claude Code or Codex use it by name." width="910"></p>
 
-## How it works
+## Developer workflow
 
-1. **You paste a key into Claude and say "save this".** keywarden saves the key, puts its name in your message where the key was, and sends the message on. Claude sees `save this: [WEATHER_API_KEY]` and carries on with what you asked. If keywarden spots a known kind of key (`sk-`, `ghp_`, `AKIA`, a private key) without "save this", it saves it anyway. To pick the name, send `key NAME value` instead.
-2. **Claude looks in keywarden first.** Every Claude session starts with a list of the saved key names, so Claude uses one of those before saying it doesn't have a key.
-3. **Claude asks for access.** If the key already has a grant, Claude gets it. If not, Claude asks you in the chat, and you reply approve (or approve 1h) to create a grant. A grant lasts 12 hours unless you say otherwise. With a grant, every command Claude runs has the key as `$NAME`, and Claude never sees the value.
+**1. Install once.** Requires Python 3. Keep this checkout: the installed command and hooks run its scripts.
 
-## How it keeps your keys safe
-
-- **Keys never sit in a file.** They're stored in 1Password or your computer's key store (Windows Credential Manager or the Mac Keychain), which encrypt them on disk. keywarden never writes a key to a `.env` file, a script or a log.
-- **A pasted key never reaches Claude.** keywarden's Claude Code plugin reads each message before Claude does. When it finds a key, it saves the key and replaces it with the key's name, so the key is never sent to the model provider or written to Claude's logs. If the plugin isn't loaded, a second hook stops any message that still has a key in it, and you send it again without the key.
-- **Only you can approve.** When Claude asks for a key, the request waits until you reply approve. That reply goes through the same hook, which only sees messages you type, so Claude can't approve itself. Any other agent can ask with `keys grant` or `keys run NAME -- command`, and you approve it the same way. A grant only covers the keys you approved, and it ends after 12 hours, or sooner with `keys lock`.
-- **Claude uses keys without seeing them.** While a key has a grant, a second hook puts the key into each command Claude runs as `$NAME`. If a command prints a key, the hook replaces it with `<concealed by keywarden>` before Claude reads the output.
-- **Claude can't copy a key out.** The second hook blocks commands that would show a key, like `echo $OPENAI_API_KEY`, `printenv` or `cat .env`. It also stops Claude from writing a key into a file or a command, and from editing keywarden's own files or removing its hooks.
-- **Every request and grant is logged** in `~/.agent-keys/use.log`, with the keys, the reason and the time.
-
-What it can't stop: a program that runs as you on your computer, like malware, can still read the key store or fake a grant. keywarden keeps keys out of chats, logs and files. It doesn't protect a computer that's already hacked. With `keys strict on` and 1Password, every program that reads a key has to pass 1Password's own fingerprint or face check, which makes that harder.
-
-## Install
-
-```
+```sh
 git clone https://github.com/andrsnn/keywarden
 cd keywarden
-python install.py
+python3 install.py
 keys setup
 ```
 
-`install.py` adds keywarden's hooks and its Claude Code plugin. It also installs the 1Password command line tool if winget (Windows) or Homebrew (Mac) is there.
+The installer adds `keys`, hooks, and a skill for both agents, plus Claude's prompt-replacement plugin. It installs the 1Password CLI through Homebrew or winget when available. If it changes your PATH, open a new terminal before `keys setup`. On Windows, use `python` instead of `python3` if needed.
 
-## Where your keys are stored
+Restart your agent. In **Codex**, review and trust keywarden in `/hooks`, or **Settings > Hooks** on desktop. Hooks won't run until trusted. To install for just one agent, use `python3 install.py --agent claude` or `--agent codex`.
 
-keywarden keeps keys in one of two places. `keys setup` picks 1Password if it's connected, and your computer's key store if not. Run it again at any time to see or change the choice.
+**2. Save a key.** Copy its value, then run this in your terminal:
 
-**1Password (preferred).** Your keys sync to your other devices and sit in a vault you can see in the 1Password app.
-
-1. Install the 1Password app and sign in.
-2. In the app, open Settings, then Developer, and turn on "Integrate with 1Password CLI".
-3. Run `keys setup 1password`. keywarden makes a vault called "Agent Keys". To use a different vault, run `keys setup 1password "Vault Name"`.
-
-On a computer that runs without you at it, like a server, use a 1Password service account. Save its token with `keys add OP_SERVICE_ACCOUNT_TOKEN --clipboard`, then run `keys setup 1password`.
-
-**Your computer's key store.** On Windows that's Credential Manager, and on a Mac it's the Keychain. Nothing to install. Run `keys setup local`. On Linux, use 1Password, because this option only works on Windows and Mac.
-
-**Moving between them.** `keys switch 1password` copies every key into 1Password and uses it from then on. `keys switch local` goes the other way. Copying needs your approval. The old copies stay where they were until you delete them, so you can check the new store first.
-
-**Strict mode (1Password only).** Normally, once you approve a key, keywarden keeps a copy in your computer's key store until the grant ends. `keys strict on` turns that off. Every time a command needs a key, keywarden reads it fresh from 1Password, and 1Password asks for your fingerprint or face. Turning strict mode off needs your approval.
-
-## How you approve
-
-- **In the chat (default).** Claude asks, and you reply approve, approve 1h, or no. Set it with `keys approvals chat`.
-- **On your phone.** Run `keys phone` and open the link it prints on your phone. It works over Tailscale and approves with Face ID. Then `keys approvals phone` sends every request to your phone, or `keys protect NAME` does it for one key only.
-- **No question.** `keys approvals off` gives a grant without asking. Changing to this needs your approval.
-
-## Commands
-
+```sh
+keys add OPENAI_API_KEY --clipboard
 ```
-keys list                       saved keys, with what each is and where it came from
-keys add NAME --clipboard       save the key you copied
-keys note NAME "what it is"     add a note that you and Claude see in the list
-keys grant NAME --for "why"     give Claude a key for 12 hours
-keys status                     which keys have a grant
-keys lock [NAME]                end a grant now, or every grant
-keys setup                      see or change where keys are stored
+
+keywarden saves the value and clears the clipboard. The agent gets its name.
+
+**3. Ask your agent to use it.** For example: `Use OPENAI_API_KEY to call the API.` The agent requests access:
+
+```sh
+keys grant OPENAI_API_KEY --for "call the API"
 ```
+
+It asks you:
+
+```text
+I need OPENAI_API_KEY. Reason: call the API. Reply approve, or approve 1h.
+```
+
+**4. Reply `approve 1h`.** The message hook records your approval. The agent retries the grant, then uses `$OPENAI_API_KEY` in Bash or `$env:OPENAI_API_KEY` in PowerShell. The hook loads the value into approved shell commands and filters their output:
+
+```text
+<concealed by keywarden>
+```
+
+`approve` alone grants 12 hours by default. Reply `no` to deny access. Grants cover the named keys and are shared by local sessions on this computer.
+
+**5. End access whenever you want.** Otherwise it expires automatically.
+
+```sh
+keys lock OPENAI_API_KEY
+```
+
+<details>
+<summary><strong>What happens if I paste a key into chat?</strong></summary>
+
+Recognized formats and explicit save requests are detected. Detection is not exhaustive; the clipboard command above keeps the value out of chat entirely.
+
+| Agent | What happens |
+| --- | --- |
+| **Claude Code, plugin loaded** | Saves the detected key, replaces its value with `[NAME]`, and forwards the rewritten message. A toast says `keywarden saved your key as NAME`. |
+| **Codex** | Saves the detected key and blocks the message. Clear the value from the input, then resend your request using the saved name. |
+| **Claude Code, plugin unavailable** | Uses the same save-and-block fallback. |
+
+For a newly saved key named `OPENAI_API_KEY`, the Codex hook's exact reason is:
+
+```text
+Saved your key as OPENAI_API_KEY. This is keywarden working, not an error: it held your message back on purpose, so Codex never saw the key. Clear the key from the input box, then ask Codex to use OPENAI_API_KEY. To change the name, ask Codex to rename it.
+```
+
+Blocked messages may still be logged locally. keywarden attempts to scrub the supplied transcript in the background. If a real key already reached the model provider, rotate it; local cleanup cannot undo that exposure. `keys rescue --save --redact` searches **Claude's** local logs, not Codex's.
+
+</details>
+
+## Storage backends
+
+Both agents use the same store. `keys setup` chooses 1Password if connected, otherwise the OS store.
+
+| Backend | Best for | Setup |
+| --- | --- | --- |
+| **1Password** | Synced keys and shared vaults. macOS and Windows. | Connect the app and CLI, then `keys setup 1password`. |
+| **macOS Keychain** | Local keys without another account. | `keys setup local` |
+| **Windows Credential Manager** | Local keys without another account. | `keys setup local` |
+
+For 1Password, enable **Settings > Developer > Integrate with 1Password CLI** in its app. keywarden creates an **Agent Keys** vault. Supply another name with `keys setup 1password "Vault Name"`.
+
+Use `keys switch 1password` or `keys switch local` to copy keys and change stores with approval. Old copies remain until you delete them.
+
+## Why this helps
+
+| Protection | Why it matters |
+| --- | --- |
+| **Encrypted storage** | Values stay in 1Password or the OS key store instead of plaintext `.env` files and source code. |
+| **Names in the conversation** | The agent can find and reuse saved keys without asking you to paste their values. |
+| **Expiring approval** | Your chat reply, phone passkey, or local biometric check grants access to selected keys. `keys lock` ends it early. |
+| **Exposure checks** | Hooks block common leaks such as `printenv`, `echo $API_KEY`, reading `.env`, and inserting detected keys into commands or file edits. |
+| **Filtered output** | Hooked commands mask key values and their base64 forms before the agent reads their output. `keys run` masks literal values. |
+| **Audit trail** | `~/.agent-keys/use.log` records grant requests and approvals with names, reasons, and times. |
+
+**The boundary is your computer.** These hooks are guardrails, not a sandbox: a determined command or another program running as you can bypass them or access your store. Approved processes receive real values. Use these integrations in local sessions where the scripts and key store are available; cloud agents don't inherit them.
+
+With 1Password, `keys strict on` disables local cached copies and reads fresh through 1Password's authentication. Otherwise, approved values are cached in the OS store; expired copies are cleared on the next cache check or `keys lock`. 1Password decides when to prompt for authentication.
+
+<details>
+<summary><strong>More commands and approval options</strong></summary>
+
+| Command | Purpose |
+| --- | --- |
+| `keys list` / `keys status` | Find saved names and see current grants. |
+| `keys add NAME` | Save via hidden typing or piped input. Also accepts `--from-env VAR`. |
+| `keys import FILE.env` | Save keys from an existing file. |
+| `keys note NAME "description"` | Tell agents what a key is for. |
+| `keys rename OLD NEW` / `keys remove NAME` | Rename or delete with approval. |
+| `keys run NAME -- command` | Give selected keys to one program, including outside hooked shells. |
+| `keys ref NAME` | Make a `NAME=keys:NAME` reference for `.env.tpl`. |
+| `keys lock` | End every grant. |
+| `keys approvals chat` | Approve in chat; the default. |
+| `keys phone` / `keys phone test` | Set up and test phone approval over Tailscale with a passkey. |
+| `keys approvals phone` | Request phone or local biometric approval. |
+| `keys protect NAME` | Require phone or local biometric approval for a key. |
+| `keys approvals off` | Allow new grants without asking; changing this setting needs approval. |
+| `keys strict on` | Read fresh from 1Password without caching. Turning it off needs approval. |
+
+Phone approval lets you choose the duration. Local Touch ID / Windows Hello approval defaults to 60 minutes; change it with `keys setup --grant-minutes N`.
+
+To remove the integrations and command, run `python3 install.py --uninstall`. Saved keys remain in their store. `--agent claude` or `--agent codex` removes only that integration and keeps the shared command.
+
+</details>
+
+## Run the tests
+
+```sh
+python3 test_all.py
+```
+
+The suite checks detection, save/approve/deny/lock flows, both storage backends, phone/passkey verification, Claude and Codex hook contracts, installer updates, and output masking. When the CLIs are installed, native smoke tests verify prompt replacement/blocking against a local model stub. No real model API is called.
+
+Tests use synthetic keys, a fake 1Password CLI, temporary settings, and separate OS key-store namespaces. Storage tests require macOS or Windows; phone tests need `cryptography`, and shell-filter tests need Bash. Real 1Password authentication, Windows Hello, and phone hardware still need testing on those devices.
+
+Hook integration references: [Codex](https://learn.chatgpt.com/docs/hooks), [Claude Code](https://code.claude.com/docs/en/hooks).

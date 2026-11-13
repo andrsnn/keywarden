@@ -46,8 +46,9 @@ SHELL_RULES = [
 ]
 SHELL_RULES = [(re.compile(p), why) for p, why in SHELL_RULES]
 ENV_PATH = re.compile(r"(?:^|[\\/])" + ENV_FILE + r"$", re.I)
-OWN_FILES = re.compile(r"(?i)[\\/]\.agent-keys(?:[\\/]|$)")
-SETTINGS = re.compile(r"(?i)[\\/]\.claude[\\/]settings(?:\.local)?\.json$")
+OWN_FILES = re.compile(r"(?i)(?:^|[\\/])\.agent-keys(?:[\\/]|$)")
+SETTINGS = re.compile(r"(?i)(?:^|[\\/])\.claude[\\/]settings(?:\.local)?\.json$")
+CODEX_SETTINGS = re.compile(r"(?i)(?:^|[\\/])\.codex[\\/](?:hooks\.json|config\.toml)$")
 HOME = str(Path.home()).replace("\\", "/").rstrip("/").lower()
 
 
@@ -75,6 +76,8 @@ def written_key(tool, inp):
 
 
 def check(tool, inp):
+    if tool == "apply_patch":
+        return check_patch(inp.get("command", ""))
     name = written_key(tool, inp)
     if name:
         return (f"would put the key {name} into a {'command' if tool in ('Bash', 'PowerShell') else 'file'}. "
@@ -101,11 +104,30 @@ def check(tool, inp):
         path = inp.get("file_path", "") or inp.get("notebook_path", "")
         if OWN_FILES.search(path):
             return "changes who can approve key use"
-        if SETTINGS.search(path):
+        if SETTINGS.search(path) or CODEX_SETTINGS.search(path):
             removed = inp.get("old_string", "") + "".join(e.get("old_string", "") for e in inp.get("edits", []))
             ours = lambda t: any(w in t.lower() for w in ("keywarden", "agent-keys", "prompt_hook.py", "session_hook.py"))
             if ours(removed) or (tool == "Write" and not ours(inp.get("content", ""))):
-                return "removes the keywarden hooks from Claude's settings"
+                return "removes the keywarden hooks from the agent's settings"
+    return None
+
+
+def check_patch(patch):
+    """Check Codex's patch format using the same file and key rules as Claude edits."""
+    sections = re.split(r"(?m)^\*\*\* (Add|Update|Delete) File: (.+)\n", patch)
+    for i in range(1, len(sections), 3):
+        action, path, body = sections[i:i + 3]
+        added = "\n".join(line[1:] for line in body.splitlines() if line.startswith("+"))
+        removed = "\n".join(line[1:] for line in body.splitlines() if line.startswith("-"))
+        tool = "Edit" if action == "Update" else "Write"
+        why = check(tool, {"file_path": path, "content": added, "old_string": removed, "new_string": added})
+        if why:
+            return why
+        move = re.search(r"(?m)^\*\*\* Move to: (.+)$", body)
+        if move:
+            why = check("Write", {"file_path": move[1], "content": added})
+            if why:
+                return why
     return None
 
 
@@ -131,8 +153,12 @@ def main():
     # The command text only gets the lines that load the keys, so values never appear in the chat.
     inp, tool = data.get("tool_input") or {}, data.get("tool_name")
     if tool in ("Bash", "PowerShell") and inp.get("command") and approved():
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                                 "updatedInput": dict(inp, command=wrap(tool, inp["command"]))}}))
+        codex = "--codex" in sys.argv[1:]
+        shell = "PowerShell" if codex and os.name == "nt" and tool == "Bash" else tool
+        out = {"hookEventName": "PreToolUse", "updatedInput": dict(inp, command=wrap(shell, inp["command"]))}
+        if codex:
+            out["permissionDecision"] = "allow"  # Codex requires this with updatedInput.
+        print(json.dumps({"hookSpecificOutput": out}))
     sys.exit(0)
 
 

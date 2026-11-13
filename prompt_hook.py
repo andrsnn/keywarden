@@ -19,14 +19,18 @@ DENY = re.compile(r"(?i)^\s*(?:no|nope|deny|denied|don'?t|stop)\b")
 NOTICES = ("<task-notification", "<system-reminder", "<command-", "<local-command", "<bash-", "<user-memory",
            "Another Claude session", "[SYSTEM NOTIFICATION")
 TIME = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\b")
+IS_CODEX = "--codex" in sys.argv[1:]
+AGENT = "Codex" if IS_CODEX else "Claude"
 
 
 def block(reason):
     # Claude Code shows this under "UserPromptSubmit operation blocked by hook", so the reason has to say the
     # save worked. suppressOriginalPrompt stops it repeating the message, key and all, as "Original prompt".
     # Claude Code still puts the message back in the input box, so the reason says how to clear it.
-    print(json.dumps({"decision": "block", "reason": reason,
-                      "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "suppressOriginalPrompt": True}}))
+    out = {"decision": "block", "reason": reason}
+    if not IS_CODEX:
+        out["hookSpecificOutput"] = {"hookEventName": "UserPromptSubmit", "suppressOriginalPrompt": True}
+    print(json.dumps(out))
     sys.exit(0)
 
 
@@ -104,7 +108,7 @@ def main():
         sys.exit(0)  # never get in the way of a message because of a bug here
     if found:
         try:
-            results = keys.save_found(found, text, data.get("cwd") or "")
+            results = keys.save_found(found, text, data.get("cwd") or "", agent=AGENT)
         except BaseException as e:  # keys.die() raises SystemExit
             block(f"keywarden couldn't save the key ({e}). Your message wasn't sent.")
         try:
@@ -113,9 +117,10 @@ def main():
             pass
         words = {"saved": "Saved your key as", "replaced": "Replaced the old", "already saved": "Already had"}
         done = ". ".join(f"{words[how]} {name}" for name, how in results)
+        clear = "Clear the key from the input box" if IS_CODEX else "Press Ctrl+C to clear the key from the input box"
         block(f"{done}. This is keywarden working, not an error: it held your message back on purpose, so "
-              f"Claude never saw the key. Press Ctrl+C to clear the key from the input box, then ask Claude to "
-              f"use {results[0][0]}. To change the name, ask Claude to rename it.")
+              f"{AGENT} never saw the key. {clear}, then ask {AGENT} to "
+              f"use {results[0][0]}. To change the name, ask {AGENT} to rename it.")
     try:
         import approve
         if len(text) <= 80 and approve.pending():
