@@ -6,10 +6,12 @@ import gzip
 import http.server
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -36,12 +38,26 @@ class ModelStub(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"input_tokens":1}')
             return
+        if self.path.startswith('/v1/responses'):
+            message = {'id': 'msg_test', 'type': 'message', 'role': 'assistant', 'status': 'completed',
+                       'content': [{'type': 'output_text', 'text': 'Synthetic API response.', 'annotations': []}]}
+            response = {'id': 'resp_test', 'object': 'response', 'status': 'completed', 'output': [message],
+                        'usage': {'input_tokens': 1, 'output_tokens': 1, 'total_tokens': 2,
+                                  'input_tokens_details': {'cached_tokens': 0}}}
+            events = [
+                {'type': 'response.created', 'response': dict(response, status='in_progress', output=[])},
+                {'type': 'response.output_item.added', 'output_index': 0, 'item': dict(message, content=[], status='in_progress')},
+                {'type': 'response.output_text.delta', 'output_index': 0, 'content_index': 0,
+                 'item_id': 'msg_test', 'delta': 'Synthetic API response.'},
+                {'type': 'response.output_item.done', 'output_index': 0, 'item': message},
+                {'type': 'response.completed', 'response': response},
+            ]
+            self.send_events(events)
+            return
         # Minimal Anthropic stream, used only after Claude's plugin has sanitized the prompt.
         msg = {'id': 'msg_test', 'type': 'message', 'role': 'assistant', 'model': data.get('model', 'test'),
                'content': [], 'stop_reason': None, 'stop_sequence': None,
                'usage': {'input_tokens': 1, 'output_tokens': 0}}
-        self.send_header('Content-Type', 'text/event-stream')
-        self.end_headers()
         events = [
             {'type': 'message_start', 'message': msg},
             {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}},
@@ -52,6 +68,11 @@ class ModelStub(http.server.BaseHTTPRequestHandler):
              'usage': {'output_tokens': 1}},
             {'type': 'message_stop'},
         ]
+        self.send_events(events)
+
+    def send_events(self, events):
+        self.send_header('Content-Type', 'text/event-stream')
+        self.end_headers()
         for event in events:
             self.wfile.write(('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n').encode())
             self.wfile.flush()
@@ -67,6 +88,7 @@ def main():
         return
     case = CodexFlowTests()
     case.setUp()
+    case.value = 'sk-proj-' + secrets.token_urlsafe(40)
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), ModelStub)
     server.requests = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -76,7 +98,20 @@ def main():
                    ANTHROPIC_API_KEY='synthetic-test-key', ANTHROPIC_BASE_URL=endpoint,
                    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1', CODEX_HOME=str(case.root / 'codex'),
                    OPENAI_API_KEY='synthetic-test-key', OPENAI_BASE_URL=endpoint + '/v1')
-        prompt = 'key DEMO_API_KEY ' + case.value
+        prompt = 'Build an AI chat app with this OpenAI API key: ' + case.value
+
+        def reset_capture():
+            server.requests.clear()
+            (case.root / 'op.json').write_text(json.dumps({'vaults': {'Agent Keys': {}}}))
+            for name in ('grants.json', 'saved.json', 'meta.json', 'pending.json', 'use.log'):
+                (case.state / name).unlink(missing_ok=True)
+
+        def check_saved_and_granted():
+            db = json.loads((case.root / 'op.json').read_text())
+            assert db['vaults']['Agent Keys']['OPENAI_API_KEY'] == case.value
+            grants = json.loads((case.state / 'grants.json').read_text())
+            assert 3500 < grants['OPENAI_API_KEY'] - time.time() <= 3600
+            assert any(b'Saved as OPENAI_API_KEY. Approved for 1 hour.' in body for body in server.requests)
         if claude:
             plugin = case.root / 'plugin'
             shutil.copytree(HERE, plugin, ignore=shutil.ignore_patterns('.git', '__pycache__'))
@@ -91,21 +126,23 @@ def main():
             assert 'Synthetic API response.' in result.stdout, result.stdout
             assert server.requests, 'Claude did not forward the sanitized prompt'
             assert not any(case.value.encode() in body for body in server.requests), 'Value reached model stub'
-            assert any(b'[DEMO_API_KEY]' in body for body in server.requests), 'No saved-name reference'
-            db = json.loads((case.root / 'op.json').read_text())
-            assert db['vaults']['Agent Keys']['DEMO_API_KEY'] == case.value
-            print('PASS native Claude plugin: saves the key, forwards its name, keeps the value out of model requests', flush=True)
-            server.requests.clear()
+            assert any(b'[OPENAI_API_KEY]' in body for body in server.requests), 'No saved-name reference'
+            check_saved_and_granted()
+            print('PASS native Claude plugin: saves, approves 1 hour, forwards only the saved name', flush=True)
+            reset_capture()
             result = subprocess.run([*base, prompt], env=env, cwd=case.root, input='',
                                     capture_output=True, text=True, timeout=30)
             assert result.returncode == 0, result.stderr
-            assert 'UserPromptSubmit operation blocked by hook:' in result.stdout, result.stdout
-            assert not server.requests, 'Blocked Claude prompt reached the model stub'
+            assert 'Synthetic API response.' in result.stdout, result.stdout
+            assert any(case.value.encode() in body for body in server.requests), 'Fallback exposure expectation changed'
+            assert any(b'pasted value can reach' in body for body in server.requests), 'Missing exposure disclosure'
+            check_saved_and_granted()
             assert case.value not in result.stdout + result.stderr
-            print('PASS native Claude fallback: saves/blocks a pasted key before a model request', flush=True)
+            print('PASS native Claude fallback: saves, approves, continues, and discloses original-prompt exposure', flush=True)
         else:
             print('SKIP native Claude tests: CLI not installed', flush=True)
         if codex:
+            reset_capture()
             home = Path(env['CODEX_HOME'])
             home.mkdir()
             (home / 'config.toml').write_text(
@@ -123,11 +160,13 @@ def main():
             assert result.returncode == 0, result.stderr
             events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
             completed = [event for event in events if event.get('type') == 'turn.completed']
-            assert completed and completed[0]['usage']['input_tokens'] == 0, result.stdout
-            assert not server.requests, 'Blocked Codex prompt reached the model stub'
-            assert (case.state / 'meta.json').exists(), 'Codex did not save the key'
+            assert completed and completed[0]['usage']['input_tokens'] > 0, result.stdout + result.stderr
+            assert 'Synthetic API response.' in result.stdout, result.stdout
+            assert any(case.value.encode() in body for body in server.requests), 'Codex exposure expectation changed'
+            assert any(b'pasted value can reach' in body for body in server.requests), 'Missing exposure disclosure'
+            check_saved_and_granted()
             assert case.value not in result.stdout + result.stderr
-            print('PASS native Codex: installed prompt hook saves/blocks a pasted key with zero model tokens', flush=True)
+            print('PASS native Codex: saves, approves 1 hour, continues, and discloses original-prompt exposure', flush=True)
         else:
             print('SKIP native Codex test: CLI not installed', flush=True)
     finally:

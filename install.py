@@ -85,12 +85,14 @@ def claude(*args):
 
 
 def install_plugin():
-    """The Claude Code plugin swaps a pasted key for its name and lets the message through. Without it, the
-    UserPromptSubmit hook stops any message with a key in it."""
+    """Install or refresh Claude's prompt replacement; the command hook is the save-and-continue fallback."""
     (REPO / "hooks" / "python-path.txt").write_text(PY + "\n", encoding="utf-8")
     claude("plugin", "marketplace", "add", str(REPO))
-    if claude("plugin", "install", "keywarden@keywarden", "--scope", "user"):
-        say("Claude plugin: installed (a pasted key is swapped for its name, and your message still goes through)")
+    claude("plugin", "marketplace", "update", "keywarden")
+    installed = claude("plugin", "install", "keywarden@keywarden", "--scope", "user")
+    updated = claude("plugin", "update", "keywarden@keywarden", "--scope", "user")
+    if installed or updated:
+        say("Claude plugin: ready (pasted keys are replaced with names; supplying a task grants 1 hour)")
     else:
         say("Claude plugin: not installed. Run  claude plugin marketplace add " + str(REPO) +
             "  and then  claude plugin install keywarden@keywarden")
@@ -176,7 +178,8 @@ def install_codex():
     write_settings(d, CODEX_HOOKS)
     say(f"Codex hooks: added to {CODEX_HOOKS}")
     say("Codex: restart, then review and trust keywarden in /hooks (desktop: Settings > Hooks).")
-    say("Codex: pasted keys are saved and the message is blocked. Resend using the saved name.")
+    say("Codex: keys supplied with a task are saved and approved for 1 hour; the task continues.")
+    say("Codex: the original paste can reach the model/history. Local redaction is best-effort.")
 
 
 def uninstall(agent="both"):

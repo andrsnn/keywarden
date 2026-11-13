@@ -37,6 +37,7 @@ FOUND = [  # (message, the names it saves)
     ("save this as CLOUDFRONT_PRIVATE_KEY\n" + pem, ["CLOUDFRONT_PRIVATE_KEY"]),
     # found with no "save"
     (f"here's my openai key {openai}", ["OPENAI_API_KEY"]),
+    (f"Build an AI chat app with this OpenAI API key: {openai}", ["OPENAI_API_KEY"]),
     (f"use this {gh} for the repo", ["GITHUB_TOKEN"]),
     (pem, ["PRIVATE_KEY"]),
     ("OPENAI_API_KEY=" + plain + "\nR2_BUCKET=games", ["OPENAI_API_KEY"]),

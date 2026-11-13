@@ -36,10 +36,10 @@ def expect(name, cond):
 try:
     run("keys.py", "setup", "local")
     out = say("save this cloudfront key K2JCJMDEHXQW5F")
-    expect("save this saves and stops the message", '"block"' in out and "Saved your key as CLOUDFRONT_KEY" in out
+    expect("save this saves and continues the message", '"block"' not in out and "Saved as CLOUDFRONT_KEY" in out
            and "K2JC" not in out)
-    expect("the message says the save worked", "not an error" in out)
-    expect("Claude Code is told not to show the message again", '"suppressOriginalPrompt": true' in out)
+    expect("the message explains the local cleanup limit", "best-effort" in out)
+    expect("fallback discloses the original paste", "pasted value can reach" in out)
     expect("the key is in the store", "CLOUDFRONT_KEY" in run("keys.py", "list")[1])
     out = run("session_hook.py")[1]
     expect("new sessions are told the key names", "CLOUDFRONT_KEY" in out and "K2JC" not in out)
@@ -89,6 +89,10 @@ try:
     expect("rewrite swaps the key for its name", out.get("text") == "here is my maps api key, save this: "
            "[MAPS_API_KEY] and get the map tiles" and out.get("saved") == [["MAPS_API_KEY", "saved"]])
     expect("rewrite saves the key", "MAPS_API_KEY" in run("keys.py", "list")[1])
+    expect("a task supplied with the key is approved immediately", out.get("approved") == ["MAPS_API_KEY"])
+    expect("Codex discovers a key Claude saved in the local store", "MAPS_API_KEY" in run("session_hook.py", "--codex")[1])
+    code, granted = run("keys.py", "grant", "MAPS_API_KEY", "--for", "continue in Codex")
+    expect("Codex reuses Claude's local-store grant without another approval", code == 0 and "Reply approve" not in granted)
     expect("the rewritten message passes the settings hook", '"block"' not in say(out["text"]))
     out = json.loads(run("prompt_hook.py", "--rewrite", stdin=json.dumps({"prompt": "fix the bug in a.ts"}))[1])
     expect("rewrite leaves a message with no key alone", out == {"text": "fix the bug in a.ts", "saved": []})

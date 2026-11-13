@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""keys: keep API keys locked away and hand them to programs, so Claude only sees key names.
+"""keys: share one API key store across Claude Code and Codex, with temporary access for programs.
 
   keys setup                        use 1Password if it's connected, otherwise this computer's key store
   keys setup 1password [VAULT]      use 1Password (preferred)
@@ -13,7 +13,7 @@
                                     save a key (from the clipboard, a variable, a pipe, or typed hidden)
   keys import FILE.env              save every NAME=value line of a .env file
   keys list                         list saved keys: what each is, when and where it was saved
-  keys note NAME "what it is"       add a note to a key, shown in keys list and to each new Claude session
+  keys note NAME "what it is"       add a note to a key, shown in keys list and to each new agent session
   keys rename OLD NEW               rename a saved key
   keys remove NAME                  delete a saved key
   keys ref NAME                     print the line for a .env.tpl file
@@ -821,7 +821,7 @@ def find_keys(text):
             continue
         if (asked or SECRET_NAME.search(name)) and _raw_ok(v) and not v.isdigit() and len(v) >= 12:
             if KEY_WORDS.fullmatch(name):
-                add(_name_before(text, m.start(2)) or name, v, False, m.span(2))
+                add(_format_name(v) or _name_before(text, m.start(2)) or name, v, False, m.span(2))
             else:
                 add(name, v, True, m.span(2))
     for m in KNOWN.finditer(orig):
@@ -1076,19 +1076,37 @@ def scrub_in_place(f, values, start=0):
 
 
 def cmd_scrub(args):
-    """keys _scrub FILE OFFSET, with the values on stdin. The prompt hook starts this in the background after it
-    saves a pasted key: Claude Code writes the blocked message, key included, into the session log after the
-    hook returns, so this waits for that line and blanks the key out for the next 30 seconds."""
+    """keys _scrub FILE OFFSET, with a JSON array of values on stdin. Watch local writes for 30 seconds.
+
+    This cannot change in-memory conversation state or remove copies held by a model provider.
+    """
     path, start = Path(args[0]), max(0, int(args[1]))
-    values = set()
-    for v in sys.stdin.read().splitlines():
-        if len(v) >= 8:
-            values.add(v.encode())
-            values.add(json.dumps(v)[1:-1].encode())  # the form it takes inside a JSON line
+    raw = sys.stdin.read()
+    try:
+        supplied = json.loads(raw)
+    except ValueError:
+        supplied = raw.splitlines()  # Compatibility with helpers started before an update.
+    values = scrub_values(supplied)
     end = time.time() + 30
     while values and time.time() < end:
         time.sleep(1)
         scrub_in_place(path, values, start)
+
+
+def scrub_values(supplied):
+    """Literal and JSON-encoded spellings, including Unicode and multiline secrets."""
+    if not isinstance(supplied, list):
+        return set()
+    values = set()
+    for value in supplied:
+        if not isinstance(value, str) or len(value) < 8:
+            continue
+        for v in [value, *(line.strip() for line in value.splitlines()
+                            if len(line.strip()) >= 16 and not line.startswith("-----"))]:
+            values.add(v.encode())
+            values.add(json.dumps(v)[1:-1].encode())
+            values.add(json.dumps(v, ensure_ascii=False)[1:-1].encode())
+    return values
 
 
 COMMANDS = {"_scrub": cmd_scrub, "note": cmd_note, "setup": cmd_setup, "switch": cmd_switch, "strict": cmd_strict, "approvals": cmd_approvals,

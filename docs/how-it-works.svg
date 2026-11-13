@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 910 260" width="910" height="260" role="img" aria-labelledby="title desc" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
-  <title id="title">Save. Approve. Use.</title>
-  <desc id="desc">Save a key in 1Password or your OS key store. Approve access in chat or with a phone or biometric check. Claude Code and local Codex use the saved name while hooked commands receive the value.</desc>
+  <title id="title">Give a task and key. Keep building. Reuse later.</title>
+  <desc id="desc">Give your agent a task and an API key. keywarden saves the key and approves one hour. After expiry, approve reuse in chat. Local redaction is best-effort.</desc>
   <style>
     .bg { fill:#ffffff; } .box { fill:#f6f8fa; stroke:#d0d7de; }
     .vault { fill:#eef4ff; stroke:#0969da; } .use { fill:#effaf3; stroke:#1a7f37; }
@@ -15,22 +15,22 @@
   </style>
   <rect class="bg" width="910" height="260" rx="12"/>
   <rect class="vault" x="20" y="25" width="260" height="160" rx="12"/>
-  <text class="t" x="40" y="59" font-size="20" font-weight="700">1. Save once</text>
-  <text class="code" x="40" y="92">keys add NAME --clipboard</text>
-  <text class="t" x="40" y="126" font-size="15">1Password or your OS key store</text>
-  <text class="muted" x="40" y="153" font-size="13">The value stays out of chat.</text>
+  <text class="t" x="40" y="59" font-size="20" font-weight="700">1. Give a task + key</text>
+  <text class="code" x="40" y="92">"Build this with this key…"</text>
+  <text class="t" x="40" y="126" font-size="15">Talk to your agent normally.</text>
+  <text class="muted" x="40" y="153" font-size="13">keywarden saves the detected key.</text>
   <path class="arrow" d="M291 105 H320 l-7 -5 m7 5 l-7 5"/>
   <rect class="box" x="325" y="25" width="260" height="160" rx="12"/>
-  <text class="t" x="345" y="59" font-size="20" font-weight="700">2. Approve access</text>
-  <text class="code" x="345" y="92">approve 1h</text>
-  <text class="t" x="345" y="126" font-size="15">Choose which keys and how long.</text>
-  <text class="muted" x="345" y="153" font-size="13">Chat, phone, or a biometric check.</text>
+  <text class="t" x="345" y="59" font-size="20" font-weight="700">2. Keep building</text>
+  <text class="code" x="345" y="92">"Approved for 1 hour."</text>
+  <text class="t" x="345" y="126" font-size="15">Saved once. First use approved.</text>
+  <text class="muted" x="345" y="153" font-size="13">You already asked to use the key.</text>
   <path class="arrow" d="M596 105 H625 l-7 -5 m7 5 l-7 5"/>
   <rect class="use" x="630" y="25" width="260" height="160" rx="12"/>
-  <text class="t" x="650" y="59" font-size="20" font-weight="700">3. Use by name</text>
-  <text class="code" x="650" y="92">$OPENAI_API_KEY</text>
-  <text class="t" x="650" y="126" font-size="15">Commands get the value.</text>
-  <text class="muted" x="650" y="153" font-size="13">The agent works with the name.</text>
+  <text class="t" x="650" y="59" font-size="20" font-weight="700">3. Reuse later</text>
+  <text class="code" x="650" y="92">approve 30m · approve 2h</text>
+  <text class="t" x="650" y="126" font-size="15">After expiry, approve in chat.</text>
+  <text class="muted" x="650" y="153" font-size="13">No need to paste the value again.</text>
   <text class="t" x="455" y="218" text-anchor="middle" font-size="15" font-weight="600">Claude Code + local Codex · One shared key store</text>
-  <text class="muted" x="455" y="243" text-anchor="middle" font-size="13">End access at any time: keys lock</text>
+  <text class="muted" x="455" y="243" text-anchor="middle" font-size="13">Local transcript redaction is best-effort. End access at any time: keys lock</text>
 </svg>

@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -70,6 +71,14 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue((install.SKILL / "SKILL.md").exists())
         self.assertNotIn("--codex", json.dumps(once))
 
+    def test_claude_plugin_upgrade_is_requested(self):
+        repo = Path(self.tmp.name) / "plugin"
+        (repo / "hooks").mkdir(parents=True)
+        with patch.object(install, "REPO", repo), patch.object(install, "claude", return_value=True) as cli:
+            install.install_plugin()
+        self.assertIn(unittest.mock.call("plugin", "marketplace", "update", "keywarden"), cli.call_args_list)
+        self.assertIn(unittest.mock.call("plugin", "update", "keywarden@keywarden", "--scope", "user"), cli.call_args_list)
+
     def test_default_installs_both(self):
         with patch.object(install, "install_op"), patch.object(install, "install_plugin"), \
                 patch.object(install.subprocess, "run"), patch.object(install.shutil, "which", return_value=None):
@@ -114,18 +123,101 @@ class CodexFlowTests(unittest.TestCase):
     def grant(self):
         return self.run_script("keys.py", "grant", "DEMO_API_KEY", "--for", "testing the API")
 
-    def test_paste_is_saved_and_blocked(self):
+    def test_save_only_paste_is_saved_and_continues_without_grant(self):
         out = self.message("key DEMO_API_KEY " + self.value)
-        self.assertEqual(out["decision"], "block")
-        self.assertIn("Saved your key as DEMO_API_KEY", out["reason"])
-        self.assertIn("ask Codex to use DEMO_API_KEY", out["reason"])
-        self.assertNotIn("hookSpecificOutput", out)  # No Claude-only suppressOriginalPrompt field.
+        self.assertNotIn("decision", out)
+        self.assertIn("Saved as DEMO_API_KEY", out["systemMessage"])
+        self.assertIn("pasted value can reach the model", out["systemMessage"])
+        self.assertNotIn("suppressOriginalPrompt", json.dumps(out))
+        self.assertFalse((self.state / "grants.json").exists())
         self.assertNotIn(self.value, json.dumps(out))
         self.assertIn("DEMO_API_KEY", self.run_script("keys.py", "list").stdout)
         meta = (self.state / "meta.json").read_text()
         self.assertIn("pasted in a Codex chat", meta)
         self.assertNotIn(self.value, meta)
         self.assertEqual(self.message("use DEMO_API_KEY"), {})
+
+    def test_task_paste_approves_one_hour_then_expiry_requires_chat(self):
+        before = time.time()
+        out = self.message("Build an app using this key.\nkey DEMO_API_KEY " + self.value)
+        self.assertIn("Saved as DEMO_API_KEY. Approved for 1 hour.", out["systemMessage"])
+        grants = json.loads((self.state / "grants.json").read_text())
+        self.assertGreaterEqual(grants["DEMO_API_KEY"], before + 3600)
+        self.assertLess(grants["DEMO_API_KEY"], time.time() + 3601)
+        self.assertEqual(self.grant().returncode, 0)
+        self.assertNotIn(self.value, (self.state / "use.log").read_text())
+        self.assertEqual(json.loads((self.state / "config.json").read_text()).get("approvals", "chat"), "chat")
+        (self.state / "grants.json").write_text(json.dumps({"DEMO_API_KEY": time.time() - 1}))
+        self.assertEqual(self.message("Build another app with DEMO_API_KEY"), {})
+        self.assertNotEqual(self.grant().returncode, 0)
+        out = self.message("approve 30m")
+        self.assertIn("for 30 minutes", out["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(self.grant().returncode, 0)
+        self.run_script("keys.py", "lock")
+        self.grant()
+        self.assertIn("for 2 hours", json.dumps(self.message("approve 2h")))
+        self.run_script("keys.py", "lock")
+        self.grant()
+        self.assertIn("for 1 hour", json.dumps(self.message("approve")))
+
+    def test_task_paste_respects_stronger_approval_settings(self):
+        for extra in ({"protected": ["DEMO_API_KEY"]}, {"approvals": "phone"}):
+            with self.subTest(extra=extra):
+                (self.state / "config.json").write_text(json.dumps({"backend": "1password", "strict": True, **extra}))
+                out = self.message("Build an app with this key.\nkey DEMO_API_KEY " + self.value)
+                self.assertNotIn("Approved for 1 hour", out["systemMessage"])
+                self.assertFalse((self.state / "grants.json").exists())
+                self.assertIn("Request approval", out["hookSpecificOutput"]["additionalContext"])
+
+    def test_negative_or_storage_only_requests_do_not_approve(self):
+        for request in ("Just save this key", "Save this key only", "Build an app later; don't use this yet",
+                        "Do not use this key", "Save this without using it", "Use this later, not yet",
+                        "I get this token when I run a script"):
+            with self.subTest(request=request):
+                self.message(request + ".\nkey DEMO_API_KEY " + self.value)
+                self.assertFalse((self.state / "grants.json").exists())
+
+    def test_key_name_is_not_task_consent(self):
+        out = self.message("key BUILD " + self.value)
+        self.assertFalse((self.state / "grants.json").exists())
+        self.assertIn("Saved as BUILD.", out["systemMessage"])
+
+    def test_claude_task_rewrite_saves_and_approves_before_forwarding(self):
+        request = "Build an app with this key.\nkey DEMO_API_KEY " + self.value
+        result = self.run_script("prompt_hook.py", "--rewrite", data={"prompt": request})
+        out = json.loads(result.stdout)
+        self.assertEqual(out["text"], "Build an app with this key.\nkey DEMO_API_KEY [DEMO_API_KEY]")
+        self.assertEqual(out["approved"], ["DEMO_API_KEY"])
+        self.assertEqual(out["notice"], "Saved as DEMO_API_KEY. Approved for 1 hour.")
+        self.assertNotIn(self.value, result.stdout)
+        self.assertEqual(self.grant().returncode, 0)
+
+    def test_claude_and_codex_share_store_grants_and_lock(self):
+        request = "Build an app with this key.\nkey DEMO_API_KEY " + self.value
+        out = self.run_script("prompt_hook.py", "--rewrite", data={"prompt": request})
+        self.assertEqual(json.loads(out.stdout)["approved"], ["DEMO_API_KEY"])
+        session = self.run_script("session_hook.py", "--codex").stdout
+        self.assertIn("DEMO_API_KEY", session)
+        command = "python3 -c 'import os; print(\"loaded\" if len(os.environ[\"DEMO_API_KEY\"]) == 45 else \"wrong\")'"
+
+        def use_with(agent_args):
+            result = self.run_script("hook.py", *agent_args,
+                                     data={"tool_name": "Bash", "tool_input": {"command": command}})
+            wrapped = json.loads(result.stdout)["hookSpecificOutput"]["updatedInput"]["command"]
+            run = subprocess.run(["bash", "-c", wrapped], env=self.env, capture_output=True, text=True, timeout=15)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(run.stdout.strip(), "loaded")
+
+        use_with(["--codex"])  # A key captured and approved by Claude works in Codex.
+        self.run_script("keys.py", "lock", "DEMO_API_KEY")
+        self.assertNotEqual(self.grant().returncode, 0)
+        self.message("approve 30m")  # Approval entered in Codex works in Claude too.
+        use_with([])
+        self.run_script("keys.py", "lock")
+        for agent_args in ([], ["--codex"]):
+            result = self.run_script("hook.py", *agent_args,
+                                     data={"tool_name": "Bash", "tool_input": {"command": command}})
+            self.assertEqual(result.stdout, "")  # Neither agent receives injection after the shared lock.
 
     def test_claude_explicit_save_rewrite_passes_fallback(self):
         result = self.run_script("prompt_hook.py", "--rewrite", data={"prompt": "key DEMO_API_KEY " + self.value})
@@ -180,8 +272,7 @@ class CodexFlowTests(unittest.TestCase):
         self.assertIn("prints environment variables", result.stderr)
 
     def test_save_failure_blocks_prompt(self):
-        (self.state / "config.json").write_text('{"backend":"unknown"}')
-        self.env["AGENT_KEYS_BACKEND"] = "unknown"
+        self.env["AGENT_KEYS_OP"] = f'"{sys.executable}" "{self.root / "missing-op.py"}"'
         out = self.message("key DEMO_API_KEY " + self.value)
         self.assertEqual(out["decision"], "block")
         self.assertNotIn(self.value, json.dumps(out))

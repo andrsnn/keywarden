@@ -206,7 +206,7 @@ def settings():
     "auto": granted at once with no question (keys approvals off)."""
     cfg = _load(STATE / "config.json", {})
     mode = {True: "phone", "phone": "phone", "auto": "auto"}.get(cfg.get("approvals"), "chat")
-    return mode, set(cfg.get("protected", [])), cfg.get("auto_minutes", 720)
+    return mode, set(cfg.get("protected", [])), cfg.get("auto_minutes", 60)
 
 
 def needs_tap(names):
@@ -258,6 +258,26 @@ def log_use(names, what, how):
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {how}: {', '.join(names)} for: {what[:200]}\n")
     except OSError:
         pass
+
+
+def grant_from_prompt(names, what):
+    """A user supplying a key with a task authorizes one hour, except when stronger checks are configured.
+
+    Called by prompt capture only. `what` is the request with all detected values replaced by names.
+    Supplying a value does not change approval mode or bypass protected-key / phone settings.
+    """
+    mode, protected, _ = settings()
+    allowed = sorted(set(names) - protected) if mode != "phone" else []
+    if not allowed:
+        return []
+    g = grants()
+    expiry = time.time() + 3600
+    for name in allowed:
+        g[name] = expiry
+    STATE.mkdir(exist_ok=True)
+    GRANTS.write_text(json.dumps(g))
+    log_use(allowed, what, "approved by supplying a key with a task for 1 hour")
+    return allowed
 
 
 def ask(names, what, minutes=60, timeout=300, force=False):

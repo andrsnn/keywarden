@@ -1,49 +1,52 @@
 ---
 name: keywarden
-description: Use whenever a task needs an API key, token, password or other secret, or when someone pastes one into the chat. Keys live in 1Password or the computer's key store. Run `keys grant NAME --for "why"`, and then every command you run has those keys as environment variables. You never see, print or write the values.
+description: Use keywarden when a task needs API keys or other secrets. Save supplied keys once, use their names in commands, and request expiring access to existing keys. A user supplying a key with a task grants one hour in the default chat mode.
 ---
 
 # keywarden
 
-You work with key names like `CLOUDFLARE_API_TOKEN`. You never handle the values.
+Use saved names such as `OPENAI_API_KEY`. Once saved, pass the value through environment variables; never repeat it in chat, source code, or tool arguments.
 
-## To use keys
-1. Run `keys status`. It lists the approved keys with their time left, and the names of the others.
-2. For keys you need that aren't approved, run `keys grant NAME1 NAME2 --for "what you're doing"`. Ask only for the keys the task needs.
-   - If the key already has a grant, you get it at once.
-   - If not, the command says it needs the person's OK. Ask them in a plain chat message (not a question popup): "I need NAME. Reason: what you're doing. Reply approve, or approve 1h." Then end your turn. When they reply approve, a note tells you it's granted, so run `keys grant` again. If they say no, stop and ask what they want.
-   - If a key is protected and their phone is set up, it waits for a tap instead: tell them "Approve NAME on your phone."
-3. While approved, every Bash and PowerShell command you run has those keys as environment variables. Use them by name: `"$CLOUDFLARE_API_TOKEN"` in Bash, `$env:CLOUDFLARE_API_TOKEN` in PowerShell. If a command prints a key, it shows as `<concealed by keywarden>`.
-   - Pass a key on stdin when a tool allows it: `docker login -u me --password-stdin <<< "$DOCKER_TOKEN"`.
-   - Use a header: `curl -H "Authorization: Bearer $OPENAI_API_KEY" ...`.
-   - Write a tool's config file only when the tool can't read the key any other way, and never inside a git repo.
-4. Ask for all the keys a task needs in one `keys grant`, so the person approves once.
+## A person supplies a key with a task
 
-To pass selected keys explicitly to one program, use `keys run NAME1 NAME2 -- command`. It asks for approval if none is active. Like other commands, it also inherits any keys already in its parent environment.
+The normal workflow is: they are building something, supply a key with their request, and continue building.
 
-## To save a key
-- Save every key you create or receive (an API token you made, a key in a tool's output, a key in a `.env` file) right away, so other agents can use it. Name it in capitals, like `CLOUDFLARE_API_TOKEN`.
-- From a command's output, pipe it straight in, so the value never prints: `curl -s ... | python -c "import json,sys; print(json.load(sys.stdin)['token'])" | keys add NEW_TOKEN`.
-- From a variable: `keys add NEW_TOKEN --from-env NEW_TOKEN`.
-- From a `.env` file: `keys import FILE.env`. Then delete the file if nothing else reads it.
-- From the person: don't ask them to paste a key into the chat. Ask them to copy it, then run `keys add NAME --clipboard`. That saves it and clears the clipboard.
-- If someone already pasted one, run `keys rescue --save --redact`, then tell them to rotate the key, because it was also sent to the model.
-- `keys add` confirms with the first 4 characters and the length. That's all you ever see.
+- The prompt integration saves detected keys. In default chat mode, a key supplied with a task receives a one-hour grant because the person explicitly asked to use it. A save-only request stores the key without granting access. Protected keys and phone approval mode retain their stronger checks.
+- Follow the capture notice. If it says a key is saved and approved, confirm exactly: **“Saved as NAME. Approved for 1 hour.”** Then continue their task without asking for the same approval again. Run `keys status` if you need to check the actual grant.
+- Claude Code's plugin replaces the value with `[NAME]` before forwarding the message to the model.
+- Codex and Claude's command-hook fallback save the key and continue the task, but cannot replace the submitted message. The raw paste can reach the model and local history. State that limitation when relevant; never claim those paths keep the paste away from the provider.
+- A helper attempts to redact the supplied local transcript in the background. Do not read or edit session files yourself, and do not claim all copies were erased.
+- If a supplied value was not detected, don't put it in a shell command to save it: that creates another logged copy. Ask the person to run `keys add NAME --clipboard` in their terminal. This is also an alternative for anyone who wants to avoid pasting into chat.
 
-## Keys from the person
-- Prefer `keys add NAME --clipboard` for both Claude Code and local Codex. The value stays out of the chat.
-- In Claude Code with the plugin loaded, a pasted key is saved and replaced with `[NAME]` before you see it. Carry on with their request using the saved name.
-- In Codex, or Claude Code without the plugin, the prompt hook saves a detected key and blocks the message. The person clears the value from the input and resends their request using the saved name. Don't claim Codex rewrites messages.
-- Detection recognizes save requests, `key NAME value`, and well-known formats such as sk-..., ghp_..., AKIA..., and private key blocks. Run `keys list` to see the names, and `keys rename OLD NEW` if they want a different name.
-- At the start of every session a note lists the saved key names. Check them before saying you don't have a key.
-- The hook also stops you from writing a saved key, or anything shaped like a key, into a file or a command. Use `"$NAME"` instead. If code needs a key, read it from the environment, like `os.environ["NAME"]`.
+## Reuse a saved key
 
-## To change or delete a key
-- `keys add NAME --replace`, `keys rename OLD NEW` and `keys remove NAME` go through the same check as `keys grant`. `keys unprotect` and `keys approvals off` always need the person's OK. Don't run them unless the person asks.
+1. Check `keys status` and the saved names provided at session start. Use an existing saved key before asking for its value again.
+2. If it is approved, continue. Grants are shared by local sessions on this computer until expiry or `keys lock`.
+3. If it has expired or is unapproved, run `keys grant NAME --for "what you're doing"`. Request only the keys the task needs, together in one command.
+4. If approval is pending, ask in chat: **“Use NAME for this task? Reply approve, approve 30m, approve 2h, or no.”** End your turn. The user-message hook processes the reply; then retry the command. A plain `approve` grants one hour by default. If they deny, stop using the key.
+5. If phone or local biometric approval is required, tell them where to approve. Do not bypass it.
 
-## Rules
-- Never print, echo, log or copy a key's value, and never write one into a repo, a brief or a report.
-- A hook blocks `printenv`, `env`, `echo $..._KEY`, `cat .env`, reading `.secrets`, reading the key store directly and `keys env`. If a command is blocked, find a way to pass the key by name. Don't look for a way around the block.
-- If they deny the request, stop and ask what they want. Don't ask again in a loop.
-- If `keys` says nobody approved and no phone is set up, tell them to run `keys phone`.
-- These hooks run in local Claude Code and Codex sessions after installation and, for Codex, hook trust review. They do not provide key injection or chat approval in a cloud session without the local hooks. Use `keys run NAME -- command` when a command runs outside the hooked shell.
+## Use keys in programs
+
+Approved Bash and PowerShell commands receive approved values as environment variables. Use `"$OPENAI_API_KEY"` in Bash or `$env:OPENAI_API_KEY` in PowerShell. In code, read from the environment, for example `os.environ["OPENAI_API_KEY"]`.
+
+- Pass credentials on stdin when supported: `docker login -u me --password-stdin <<< "$DOCKER_TOKEN"`.
+- Use environment references in headers: `curl -H "Authorization: Bearer $OPENAI_API_KEY" ...`.
+- `keys run NAME1 NAME2 -- command` passes selected keys explicitly and asks if approval is needed. It also inherits keys already present in its parent environment.
+- Hooked output masks literal values and their base64 forms as `<concealed by keywarden>`. `keys run` masks literal values. Treat filtering as a guardrail; avoid printing secrets in the first place.
+
+## Save keys created during work
+
+Pipe generated keys directly into storage so they do not print:
+
+`curl -s ... | python -c "import json,sys; print(json.load(sys.stdin)['token'])" | keys add NEW_TOKEN`
+
+Also available: `keys add NAME --from-env VAR`, `keys import FILE.env`, and `keys note NAME "what it is"`. Do not create plaintext key files in the repository. Remove a source file only if the user authorized that and nothing still needs it.
+
+## Changes and limits
+
+- Rename, remove, replace, unprotect, and approval-mode changes must follow their built-in approval flow and the person's instructions.
+- Use `keys lock NAME` to end one grant, or `keys lock` for all grants.
+- If a hook blocks a command such as `printenv`, reading `.env`, or accessing keywarden's state, pass the key by name through the supported interface. Do not work around the block.
+- These integrations require local hooks and access to the computer's key store. Codex requires hook trust review. Cloud sessions do not inherit local keys or hooks.
+- 1Password and phone/biometric layers are optional; actual vault authentication and hardware approval remain unverified. Do not describe unit tests or fake-backend checks as real-device validation.
