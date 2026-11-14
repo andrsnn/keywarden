@@ -11,7 +11,7 @@ Use saved names such as `OPENAI_API_KEY`. Once saved, pass the value through env
 
 The normal workflow is: they are building something, supply a key with their request, and continue building.
 
-- The prompt integration saves detected keys. In default chat mode, a key supplied with a task works in that session for 12 hours, because the person asked that session to use it. No other session or subagent gets it without asking. A save-only request stores the key without granting access. Protected keys and phone approval mode retain their stronger checks.
+- The prompt integration saves detected keys. In default chat mode, a key the person gives a session works in that session for 12 hours: giving it is the approval. No other session or subagent gets it without asking. Protected keys and phone approval mode retain their stronger checks.
 - Follow the capture notice. If it says a key is saved and approved, confirm exactly: **“Saved as NAME. This session can use it for 12 hours.”** Then continue their task without asking for the same approval again. Run `keys status` if you need to check the actual grant.
 - Claude Code's plugin replaces the value with `[NAME]` before forwarding the message to the model.
 - Codex and Claude's command-hook fallback save the key and continue the task, but cannot replace the submitted message. The raw paste can reach the model and local history. State that limitation when relevant; never claim those paths keep the paste away from the provider.
@@ -24,7 +24,7 @@ The normal workflow is: they are building something, supply a key with their req
 2. If it is approved, continue. A grant belongs to the session (or subagent) that got it. A subagent you start asks for its own: tell the person which key it needs and why, and after they reply approve, have the subagent run `keys grant` again.
 3. If it has expired or is unapproved, run `keys grant NAME --for "what you're doing"`. Request only the keys the task needs, together in one command.
 4. If approval is pending, ask in chat: **“Use NAME for this task? Reply approve, approve 30m, approve 2h, or no.”** End your turn. The user-message hook processes the reply; then retry the command. A plain `approve` grants one hour by default. If they deny, stop using the key.
-5. If phone or local biometric approval is required, tell them where to approve. Do not bypass it.
+5. If phone or local biometric approval is required, tell them where to approve. Do not bypass it. With keys in 1Password, `keys grant` first asks the person to unlock 1Password; tell them to unlock it. If that doesn't approve, it falls back to asking in the chat.
 
 ## Use keys in programs
 

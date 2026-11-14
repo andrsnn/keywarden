@@ -87,19 +87,24 @@ class OnePassword:
     def __init__(self, vault=None):
         self.vault = vault or os.environ.get("AGENT_KEYS_VAULT") or config().get("vault") or "Agent Keys"
 
-    def op(self, *args, input=None, check=True):
+    def op(self, *args, input=None, check=True, interactive=False, timeout=None):
+        """interactive: go through the 1Password app (its unlock prompt), never the saved service account token."""
         cmd = op_command()
         if not cmd:
             raise StoreError("the 1Password CLI (op) is missing. Install it: winget install AgileBits.1Password.CLI "
                              "(Mac: brew install 1password-cli)")
         env = dict(os.environ)
-        if strict():
-            env.pop("OP_SERVICE_ACCOUNT_TOKEN", None)  # strict: always go through the 1Password app's check
+        if strict() or interactive:
+            env.pop("OP_SERVICE_ACCOUNT_TOKEN", None)  # always go through the 1Password app's check
         elif "OP_SERVICE_ACCOUNT_TOKEN" not in env and (IS_WIN or sys.platform == "darwin"):
             token = local_store.read("OP_SERVICE_ACCOUNT_TOKEN")  # lets op run without a 1Password app prompt
             if token:
                 env["OP_SERVICE_ACCOUNT_TOKEN"] = token
-        r = subprocess.run(cmd + list(args), input=input, capture_output=True, text=True, encoding="utf-8", env=env)
+        try:
+            r = subprocess.run(cmd + list(args), input=input, capture_output=True, text=True, encoding="utf-8",
+                               env=env, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise StoreError("1Password didn't answer in time")
         if check and r.returncode != 0:
             raise StoreError(f"1Password said: {(r.stderr or r.stdout).strip()}")
         return r
@@ -124,6 +129,18 @@ class OnePassword:
     def read(self, name):
         r = self.op("read", f"op://{self.vault}/{name}/{FIELD}", check=False)
         return r.stdout.rstrip("\n") if r.returncode == 0 else None
+
+    def unlock(self, names, timeout=180):
+        """Approval by unlocking 1Password: read each key through the 1Password app, which asks the person to
+        unlock (Touch ID, Windows Hello or the account password). Returns (True, "") or (False, why)."""
+        for n in names:
+            try:
+                r = self.op("read", f"op://{self.vault}/{n}/{FIELD}", check=False, interactive=True, timeout=timeout)
+            except StoreError as e:
+                return False, str(e)
+            if r.returncode != 0:
+                return False, (r.stderr or r.stdout).strip()[:200] or "1Password said no"
+        return True, ""
 
     def save(self, name, value):
         if name in self.names():

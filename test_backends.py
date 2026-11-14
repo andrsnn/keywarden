@@ -36,6 +36,13 @@ if a[:2] == ["item", "edit"]:
 if os.environ.get("OP_SERVICE_ACCOUNT_TOKEN"):
     db["saw_token"] = True
     json.dump(db, open(db_path, "w"))
+elif a[0] == "read":  # no token: the 1Password app asks the person to unlock
+    db["unlock_prompts"] = db.get("unlock_prompts", 0) + 1
+    json.dump(db, open(db_path, "w"))
+    if os.environ.get("FAKE_OP_UNLOCK") == "deny":
+        sys.stderr.write("authorization prompt dismissed"); sys.exit(1)
+    if os.environ.get("FAKE_OP_UNLOCK") == "no-app":
+        sys.stderr.write("cannot connect to the 1Password app"); sys.exit(1)
 if a[0] == "read":
     _, vault, name, field = a[1].split("//")[1].split("/") if False else ([""] + a[1][5:].split("/"))
     val = db["vaults"].get(vault, {}).get(name)

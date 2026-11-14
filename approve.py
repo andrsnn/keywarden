@@ -297,10 +297,19 @@ PENDING_MINUTES = 30  # a loose reply (yes, ok, sure) answers requests this rece
 APPROVE_WORD_MINUTES = 12 * 60  # the word approve answers requests this recent, so a late reply still works
 
 
-def pending(max_minutes=PENDING_MINUTES):
-    """Requests waiting for your OK in the chat: [{names, what, at}] from the last max_minutes."""
+def asked_from(r, session):
+    """Whether this request came from the session the person is typing in: the session itself, one of its
+    subagents, or a terminal with no session. session None means any session."""
+    who = r.get("caller", TERMINAL)
+    return session is None or who in (session, TERMINAL) or who.startswith(session + "/")
+
+
+def pending(max_minutes=PENDING_MINUTES, session=None):
+    """Requests waiting for your OK in the chat: [{names, what, at, caller}] from the last max_minutes,
+    only those from `session` (and its subagents) when it is given."""
     now = time.time()
-    return [r for r in _load(PENDING, []) if isinstance(r, dict) and now - r.get("at", 0) < max_minutes * 60]
+    return [r for r in _load(PENDING, []) if isinstance(r, dict) and now - r.get("at", 0) < max_minutes * 60
+            and asked_from(r, session)]
 
 
 def add_pending(names, what, who=None):
@@ -312,10 +321,15 @@ def add_pending(names, what, who=None):
     PENDING.write_text(json.dumps(reqs))
 
 
-def answer_pending(yes, minutes=None, max_age=PENDING_MINUTES):
-    """Called by the message hook when you reply approve or no. Returns the key names it applied to."""
-    reqs = pending(max_age)
-    PENDING.unlink(missing_ok=True)
+def answer_pending(yes, minutes=None, max_age=PENDING_MINUTES, session=None):
+    """Called by the message hook when you reply approve or no in a session. It answers only that session's
+    requests (and its subagents'); requests from other sessions keep waiting. Returns the key names."""
+    reqs = pending(max_age, session)
+    rest = [r for r in pending(APPROVE_WORD_MINUTES) if not asked_from(r, session)]
+    if rest:
+        PENDING.write_text(json.dumps(rest))
+    else:
+        PENDING.unlink(missing_ok=True)
     names = sorted({n for r in reqs for n in r["names"]})
     if yes and names:
         minutes = minutes or settings()[2]
@@ -374,6 +388,9 @@ def ask(names, what, minutes=60, timeout=300, force=False):
         _set(rest, time.time() + auto_minutes * 60, who)
         log_use(rest, what, f"allowed (approvals off) ({who})")
         rest = []
+    if rest and mode == "chat" and not force:  # keys in 1Password: unlocking 1Password is the approval
+        unlocked = _unlock_1password(rest, what, who, minutes)
+        rest = [n for n in rest if n not in unlocked]
     if rest:  # ask in the chat: the message hook grants these when the person replies approve
         add_pending(rest, what, who)
         print(f"keys: {', '.join(rest)} needs your OK. Ask the person: \"I need {', '.join(rest)}. Reason: {what}. "
@@ -381,8 +398,10 @@ def ask(names, what, minutes=60, timeout=300, force=False):
               "approve.", file=sys.stderr)
         log_use(rest, what, "asked in the chat")
         return False
+    if not tap:  # everything was approved above (1Password unlock, or approvals off)
+        return True
     need = tap
-    reason = f"{', '.join(need)} for: {what}"[:300] + f" (on {socket.gethostname()})"
+    reason =f"{', '.join(need)} for: {what}"[:300] + f" (on {socket.gethostname()})"
     out, stop, procs, rids = queue.Queue(), threading.Event(), [], []
     threads = [threading.Thread(target=_local_ask, args=(reason, out, procs), daemon=True),
                threading.Thread(target=_phone_ask, args=(reason, out, stop, timeout, rids), daemon=True)]
@@ -421,6 +440,26 @@ def ask(names, what, minutes=60, timeout=300, force=False):
     else:
         print(f"keys: denied on the {src}.", file=sys.stderr)
     return False
+
+
+def _unlock_1password(names, what, who, minutes):
+    """With keys in 1Password, ask the person to unlock 1Password for these keys. Returns the keys it approved.
+    Turn it off with "unlock_1password": false in config.json; then 1Password users approve in the chat."""
+    sys.path.insert(0, str(HERE))
+    import stores
+    store = stores.current()
+    if store.kind != "1password" or not _load(STATE / "config.json", {}).get("unlock_1password", True):
+        return []
+    print(f"keys: unlock 1Password to let this session use {', '.join(names)}...", file=sys.stderr)
+    ok, why = store.unlock(names)
+    if not ok:
+        print(f"keys: 1Password didn't approve ({why}). Asking in the chat instead.", file=sys.stderr)
+        log_use(names, what, f"1Password unlock didn't approve: {why[:80]} ({who})")
+        return []
+    _set(names, time.time() + minutes * 60, who)
+    print(f"keys: {', '.join(names)} approved by unlocking 1Password for {span(minutes)}.", file=sys.stderr)
+    log_use(names, what, f"approved by unlocking 1Password for {span(minutes)} ({who})")
+    return list(names)
 
 
 def lock(names=None, who="all"):

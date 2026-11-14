@@ -30,7 +30,7 @@ You: Build an AI chat app with this OpenAI API key: sk-…
 Agent: Saved as OPENAI_API_KEY. This session can use it for 12 hours.
 ```
 
-The value lives in your key store. The agent uses `OPENAI_API_KEY` in commands instead of copying the value into your project. A request to **just save** a key stores it without granting access.
+The value lives in your key store. The agent uses `OPENAI_API_KEY` in commands instead of copying the value into your project. Every key you give a session works in that session. No other session gets it without asking.
 
 **4. Next time, reuse the saved key.** Once its grant has expired, the agent asks:
 
@@ -82,7 +82,7 @@ Start with the local store and chat approvals. These additional integrations exi
 
 | Layer | Purpose | Status |
 | --- | --- | --- |
-| **1Password** | Synced keys and shared vaults. Connect its app and CLI, then run `keys setup 1password`. | Storage behavior tested with a fake CLI; real vault authentication unverified. |
+| **1Password** | Synced keys and shared vaults. Connect its app and CLI, then run `keys setup 1password`. 1Password stays the source of truth, and the OS store only keeps copies while approvals last. When a new session asks for a key, keywarden reads it through the 1Password app, which asks you to unlock. Unlocking is the approval for that session. If the app isn't connected or you cancel, the session asks in chat instead. Set `"unlock_1password": false` in config.json to always approve in chat. | Tested with a fake CLI; real vault authentication and the real unlock prompt are unverified. |
 | **Phone / biometrics** | Passkey approval over Tailscale, or Touch ID / Windows Hello. Start with `keys phone`. | Signature logic tested; real phone and biometric approval unverified. |
 
 `keys protect NAME` and phone-required approval mode keep their extra check: supplying a key does not bypass them. With 1Password, `keys strict on` disables local caching and reads fresh through 1Password's authentication; 1Password controls when it prompts.
@@ -115,6 +115,6 @@ Uninstall with `python3 install.py --uninstall`. Saved keys stay in their store.
 python3 test_all.py
 ```
 
-Tests cover first-use approval, expiry, later chat approvals, secret detection, storage, output masking, transcript redaction, and installer updates. Native Claude and Codex tests use a local model stub and synthetic keys; no real model API is called. Storage tests use separate OS key-store namespaces and a fake 1Password CLI. Phone tests need `cryptography`; shell tests need Bash. Windows and real approval hardware remain unverified.
+Tests cover first-use approval, expiry, later chat approvals, secret detection, storage, output masking, transcript redaction, and installer updates. Native Claude and Codex tests use a local model stub and synthetic keys; no real model API is called. Storage tests use separate OS key-store namespaces and a fake 1Password CLI. Phone tests need `cryptography`; shell tests need Bash. Windows and real approval hardware remain unverified. `python e2e_claude.py` runs the per-session flow with real Claude Code sessions (it uses your Claude account).
 
 Hook references: [Codex](https://learn.chatgpt.com/docs/hooks), [Claude Code](https://code.claude.com/docs/en/hooks).

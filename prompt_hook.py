@@ -20,12 +20,6 @@ NOTICES = ("<task-notification", "<system-reminder", "<command-", "<local-comman
 TIME = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\b")
 IS_CODEX = "--codex" in sys.argv[1:]
 AGENT = "Codex" if IS_CODEX else "Claude"
-TASK = re.compile(r"(?i)(?:^|[.!?,;:\n]\s*|\b(?:please|and|then|can you|could you|would you|will you|"
-                  r"help me|i want you to|i need you to)\s+)"
-                  r"(?:use|build|create|make|implement|integrate|connect|deploy|call|fetch|get|upload|"
-                  r"download|query|test|run|do|wire|send|set up)\b")
-SAVE_ONLY = re.compile(r"(?i)\b(?:don['’]?t|do not|never)\b|\b(?:only|just)\s+(?:save|store)\b|"
-                       r"\b(?:save|store)\b[^.!?\n]{0,30}\bonly\b|\b(?:not yet|no access|without using)\b")
 
 
 def block(reason):
@@ -53,13 +47,6 @@ def minutes_in(text):
         return None
     n, unit = float(m.group(1)), m.group(2).lower()
     return n * (1440 if unit.startswith("d") else 60 if unit.startswith("h") else 1)
-
-
-def requests_use(text):
-    # Values are already replaced. A name such as BUILD or RUN is not itself a task request.
-    task_text = re.sub(r"(?m)^[ \t]*key[ \t]+[A-Za-z][A-Za-z0-9_]*[ \t]+\[[A-Z][A-Z0-9_]*\][ \t]*$", "", text)
-    task_text = re.sub(r"\[[A-Z][A-Z0-9_]*\]", "", task_text).lstrip()
-    return bool(TASK.search(task_text) and not SAVE_ONLY.search(task_text))
 
 
 def scrub_later(transcript, values):
@@ -106,7 +93,8 @@ def capture(data, agent):
         raise ValueError("a detected value remained after replacement")
     names = [name for name, _ in results]
     who = session_caller(data, agent)
-    approved = approve.grant_from_prompt(names, text, who) if requests_use(text) else []
+    # Giving a session a key is the approval: that session can use it. Protected keys and phone mode still ask.
+    approved = approve.grant_from_prompt(names, text, who)
     pending = [name for name in names if name not in approved]
     notice = ". ".join(f"Saved as {name}" for name in names) + "."
     span = approve.span(approve.paste_minutes())
@@ -164,15 +152,16 @@ def main():
         # The word approve (or no) answers a request from up to 12 hours ago. A loose yes or ok only
         # answers one from the last 30 minutes, so it can't grant an old request by accident.
         window = approve.APPROVE_WORD_MINUTES if APPROVE_WORD.match(text) or DENY.match(text) else approve.PENDING_MINUTES
-        if len(text) <= 80 and approve.pending(window):
+        session = session_caller(data, AGENT) if data.get("session_id") else None
+        if len(text) <= 80 and approve.pending(window, session):
             if APPROVE.match(text):
                 minutes = minutes_in(text)
-                names = approve.answer_pending(True, minutes, window)
+                names = approve.answer_pending(True, minutes, window, session)
                 span = approve.span(minutes or approve.settings()[2])
                 tell_agent(f"keywarden: the person approved {', '.join(names)} for {span}. "
                             "Run the command that asked for it again.")
             if DENY.match(text):
-                names = approve.answer_pending(False, max_age=window)
+                names = approve.answer_pending(False, max_age=window, session=session)
                 tell_agent(f"keywarden: the person said no to {', '.join(names)}. Don't ask again.")
     except SystemExit:
         raise

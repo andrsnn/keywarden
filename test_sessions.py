@@ -91,8 +91,10 @@ try:
 
     code, out = run("keys.py", "grant", "WEATHER_API_KEY", "--for", "subagent work", token=s1_sub)
     expect("a subagent has to ask", code != 0 and "Reply approve" in out)
+    say("approve", "S2")
+    expect("approve in another session doesn't answer the subagent", not gets_key(s1_sub))
     say("approve 15m", "S1")
-    expect("approve gives the subagent the key", gets_key(s1_sub))
+    expect("approve in the subagent's own session gives it the key", gets_key(s1_sub))
 
     run("keys.py", "lock", token=s1)
     expect("keys lock in a session ends only its own approval", not gets_key(s1) and gets_key(s2))
@@ -113,6 +115,34 @@ try:
     expect("Codex: a keys command carries its own token", bool(TOKEN.search(out)) and '"allow"' in out)
     code, out = run("keys.py", "grant", "WEATHER_API_KEY", "--for", "codex", token=token("C1", codex=True))
     expect("a Claude session's grant doesn't reach Codex", code != 0 and "Reply approve" in out)
+
+    # Keys in 1Password: a new session is approved by unlocking 1Password instead of typing approve.
+    sys.path.insert(0, str(HERE))
+    from test_backends import FAKE_OP
+    op_dir = tmp / "op"
+    op_dir.mkdir()
+    (op_dir / "fakeop.py").write_text(FAKE_OP)
+    db = op_dir / "op.json"
+    db.write_text(json.dumps({"vaults": {"Agent Keys": {"WEATHER_API_KEY": VALUE}}}))
+    base.update(AGENT_KEYS_BACKEND="1password", AGENT_KEYS_OP=f'"{sys.executable}" "{op_dir / "fakeop.py"}"',
+                FAKE_OP_DB=str(db), OP_SERVICE_ACCOUNT_TOKEN="ops_fake_service_token")
+    s5 = token("S5")
+    code, out = run("keys.py", "grant", "WEATHER_API_KEY", "--for", "the forecast", token=s5)
+    state = json.loads(db.read_text())
+    expect("1Password: unlocking approves a new session", code == 0 and "approved by unlocking 1Password" in out)
+    expect("1Password: the unlock goes through the app, not the saved token",
+           state.get("unlock_prompts") == 1 and not state.get("saw_token"))
+    expect("1Password: the unlocked session gets the key", gets_key(s5))
+    expect("1Password: another session still doesn't", not gets_key(token("S6")))
+    base["FAKE_OP_UNLOCK"] = "deny"
+    code, out = run("keys.py", "grant", "WEATHER_API_KEY", "--for", "the forecast", token=token("S7"))
+    expect("1Password: a dismissed unlock falls back to the chat", code != 0 and "didn't approve" in out
+           and "Reply approve" in out and not gets_key(token("S7")))
+    base["FAKE_OP_UNLOCK"] = "no-app"
+    code, out = run("keys.py", "grant", "WEATHER_API_KEY", "--for", "the forecast", token=token("S8"))
+    expect("1Password: with no 1Password app, approve in the chat", code != 0 and "Reply approve" in out)
+    say("approve", "S8")
+    expect("1Password: the chat approval still works", gets_key(token("S8")))
 finally:
     sys.path.insert(0, str(HERE))
     os.environ.update(AGENT_KEYS_NS="agent-keys-sessiontest", AGENT_KEYS_STATE=str(tmp))

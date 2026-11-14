@@ -106,7 +106,8 @@ class CodexFlowTests(unittest.TestCase):
         (self.state / "config.json").write_text(json.dumps({"backend": "1password", "strict": True}))
         self.env = dict(os.environ, AGENT_KEYS_STATE=str(self.state), AGENT_KEYS_NS="keywarden-integration-test",
                         AGENT_KEYS_BACKEND="1password", AGENT_KEYS_OP=f'"{sys.executable}" "{self.root / "fakeop.py"}"',
-                        FAKE_OP_DB=str(self.root / "op.json"))
+                        FAKE_OP_DB=str(self.root / "op.json"),
+                        FAKE_OP_UNLOCK="no-app")  # no 1Password app here, so approvals happen in the chat
         self.value = "demo_" + "Aq9vJ2xB7p" * 4
 
     def run_script(self, script, *args, data=None, stdin=None, token=None):
@@ -134,13 +135,13 @@ class CodexFlowTests(unittest.TestCase):
     def grant(self, token=None):
         return self.run_script("keys.py", "grant", "DEMO_API_KEY", "--for", "testing the API", token=token)
 
-    def test_save_only_paste_is_saved_and_continues_without_grant(self):
+    def test_paste_is_saved_and_continues(self):
         out = self.message("key DEMO_API_KEY " + self.value)
         self.assertNotIn("decision", out)
         self.assertIn("Saved as DEMO_API_KEY", out["systemMessage"])
         self.assertIn("pasted value can reach the model", out["systemMessage"])
         self.assertNotIn("suppressOriginalPrompt", json.dumps(out))
-        self.assertFalse((self.state / "grants.json").exists())
+        self.assertEqual(list(json.loads((self.state / "grants.json").read_text())["callers"]), ["codex:codex"])
         self.assertNotIn(self.value, json.dumps(out))
         self.assertIn("DEMO_API_KEY", self.run_script("keys.py", "list").stdout)
         meta = (self.state / "meta.json").read_text()
@@ -183,18 +184,15 @@ class CodexFlowTests(unittest.TestCase):
                 self.assertFalse((self.state / "grants.json").exists())
                 self.assertIn("Request approval", out["hookSpecificOutput"]["additionalContext"])
 
-    def test_negative_or_storage_only_requests_do_not_approve(self):
-        for request in ("Just save this key", "Save this key only", "Build an app later; don't use this yet",
-                        "Do not use this key", "Save this without using it", "Use this later, not yet",
-                        "I get this token when I run a script"):
+    def test_any_paste_approves_only_the_session_it_was_given_in(self):
+        for request in ("Just save this key", "Do not use this key yet", "key BUILD"):
             with self.subTest(request=request):
-                self.message(request + ".\nkey DEMO_API_KEY " + self.value)
-                self.assertFalse((self.state / "grants.json").exists())
-
-    def test_key_name_is_not_task_consent(self):
-        out = self.message("key BUILD " + self.value)
-        self.assertFalse((self.state / "grants.json").exists())
-        self.assertIn("Saved as BUILD.", out["systemMessage"])
+                (self.state / "grants.json").unlink(missing_ok=True)
+                out = self.message(request + ".\nkey DEMO_API_KEY " + self.value)
+                self.assertIn("This session can use it", out["systemMessage"])
+                grants = json.loads((self.state / "grants.json").read_text())["callers"]
+                self.assertEqual(list(grants), ["codex:codex"])
+                self.assertNotEqual(self.grant().returncode, 0)  # anyone else still asks
 
     def test_claude_task_rewrite_saves_and_approves_before_forwarding(self):
         request = "Build an app with this key.\nkey DEMO_API_KEY " + self.value
