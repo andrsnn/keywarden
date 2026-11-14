@@ -1,6 +1,11 @@
 """Ask a person before a program gets a key: Windows Hello / Touch ID on the computer, and buttons on the phone.
 
 Both ask at the same time. The first answer wins. A "yes" covers those keys for a few minutes (a grant).
+
+A grant belongs to one caller: the agent session that asked for it (a subagent is its own caller). The hook
+gives every command a caller token in AGENT_KEYS_CALLER, and keys.py looks the token up here, so a key one
+session was given doesn't reach another session, a subagent or Codex until the person approves it there too.
+A command with no token (a person at a terminal) is the caller "terminal".
 """
 import json
 import os
@@ -18,7 +23,10 @@ import urllib.request
 from pathlib import Path
 
 STATE = Path(os.environ.get("AGENT_KEYS_STATE") or Path.home() / ".agent-keys")
-GRANTS = STATE / "grants.json"
+GRANTS = STATE / "grants.json"  # {"callers": {caller: {name: when the approval ends}}}
+CALLERS = STATE / "callers.json"  # {token: {"caller": caller, "at": time}}, written by the hook
+TERMINAL = "terminal"
+CALLER_DAYS = 30  # forget a caller token after this long
 HERE = Path(__file__).resolve().parent
 
 WIN_HELLO = r"""
@@ -175,20 +183,86 @@ def _phone_ask(reason, out, stop, timeout, rids):
 DURATIONS = [15, 60, 240, 720, 1440]  # minutes the phone offers
 
 
-def grants():
-    """Keys approved right now: {name: when the approval ends}."""
+def token_for(caller):
+    """The token the hook puts in a command for this caller. Made on first use."""
     now = time.time()
-    return {k: v for k, v in _load(GRANTS, {}).items() if isinstance(v, (int, float)) and v > now}
+    table = {t: c for t, c in _load(CALLERS, {}).items()
+             if isinstance(c, dict) and now - c.get("at", 0) < CALLER_DAYS * 86400}
+    for t, c in table.items():
+        if c.get("caller") == caller:
+            if now - c.get("at", 0) > 86400:  # keep a busy caller's token from aging out
+                c["at"] = now
+                _save(CALLERS, table)
+            return t
+    t = secrets.token_urlsafe(18)
+    table[t] = {"caller": caller, "at": now}
+    _save(CALLERS, table)
+    return t
 
 
-def active():
-    """True if any key is approved right now."""
-    return bool(grants())
+def caller(token=None):
+    """Who is asking: the caller behind AGENT_KEYS_CALLER, or "terminal" when there is no token.
+    An unknown token is nobody, so it gets no keys."""
+    token = os.environ.get("AGENT_KEYS_CALLER", "") if token is None else token
+    if not token:
+        return TERMINAL
+    c = _load(CALLERS, {}).get(token)
+    return c["caller"] if isinstance(c, dict) and c.get("caller") else "unknown:" + token[:6]
 
 
-def granted(names):
-    """The keys in `names` that still need approval."""
-    g = grants()
+def _all():
+    """Every caller's grants that haven't run out: {caller: {name: expiry}}."""
+    now = time.time()
+    data = _load(GRANTS, {})
+    out = {}
+    for c, g in (data.get("callers", {}) if isinstance(data, dict) else {}).items():
+        live = {k: v for k, v in (g or {}).items() if isinstance(v, (int, float)) and v > now}
+        if live:
+            out[c] = live
+    return out
+
+
+def _save(path, data):
+    STATE.mkdir(exist_ok=True)
+    path.write_text(json.dumps(data))
+
+
+def _set(names, expiry, who):
+    a = _all()
+    g = a.setdefault(who, {})
+    for n in names:
+        g[n] = max(expiry, g.get(n, 0))
+    _save(GRANTS, {"callers": a})
+
+
+def grants(who=None):
+    """Keys this caller may use right now: {name: when the approval ends}."""
+    return _all().get(caller() if who is None else who, {})
+
+
+def all_granted():
+    """Every key some caller may use now, with the latest end: for the 1Password copies."""
+    out = {}
+    for g in _all().values():
+        for n, v in g.items():
+            out[n] = max(v, out.get(n, 0))
+    return out
+
+
+def callers_holding():
+    """How many other callers hold grants, for keys status."""
+    me = caller()
+    return sum(1 for c in _all() if c != me)
+
+
+def active(who=None):
+    """True if this caller has any key approved right now."""
+    return bool(grants(who))
+
+
+def granted(names, who=None):
+    """The keys in `names` that still need approval for this caller."""
+    g = grants(who)
     return [n for n in names if n not in g]
 
 
@@ -229,9 +303,11 @@ def pending(max_minutes=PENDING_MINUTES):
     return [r for r in _load(PENDING, []) if isinstance(r, dict) and now - r.get("at", 0) < max_minutes * 60]
 
 
-def add_pending(names, what):
-    reqs = [r for r in pending(APPROVE_WORD_MINUTES) if set(r["names"]) != set(names)]
-    reqs.append({"names": sorted(names), "what": what[:200], "at": time.time()})
+def add_pending(names, what, who=None):
+    who = caller() if who is None else who
+    reqs = [r for r in pending(APPROVE_WORD_MINUTES)
+            if not (set(r["names"]) == set(names) and r.get("caller", TERMINAL) == who)]
+    reqs.append({"names": sorted(names), "what": what[:200], "at": time.time(), "caller": who})
     STATE.mkdir(exist_ok=True)
     PENDING.write_text(json.dumps(reqs))
 
@@ -243,12 +319,9 @@ def answer_pending(yes, minutes=None, max_age=PENDING_MINUTES):
     names = sorted({n for r in reqs for n in r["names"]})
     if yes and names:
         minutes = minutes or settings()[2]
-        g = grants()
-        for n in names:
-            g[n] = time.time() + minutes * 60
-        GRANTS.write_text(json.dumps(g))
-        for r in reqs:
-            log_use(r["names"], r["what"], f"approved in the chat for {span(minutes)}")
+        for r in reqs:  # each request's keys go only to the caller that asked
+            _set(r["names"], time.time() + minutes * 60, r.get("caller", TERMINAL))
+            log_use(r["names"], r["what"], f"approved in the chat for {span(minutes)} ({r.get('caller', TERMINAL)})")
     return names
 
 
@@ -261,23 +334,26 @@ def log_use(names, what, how):
         pass
 
 
-def grant_from_prompt(names, what):
-    """A user supplying a key with a task authorizes one hour, except when stronger checks are configured.
+PASTE_MINUTES = 12 * 60  # a session that was given a key can use it this long
 
-    Called by prompt capture only. `what` is the request with all detected values replaced by names.
-    Supplying a value does not change approval mode or bypass protected-key / phone settings.
+
+def paste_minutes():
+    return _load(STATE / "config.json", {}).get("paste_minutes", PASTE_MINUTES)
+
+
+def grant_from_prompt(names, what, who=TERMINAL):
+    """Giving a session a key is the approval: the session that was given it can use it (paste_minutes),
+    and no other caller can. Protected keys and phone mode still ask.
+
+    Called by prompt capture only. `what` is the message with every value replaced by its name.
     """
     mode, protected, _ = settings()
     allowed = sorted(set(names) - protected) if mode != "phone" else []
     if not allowed:
         return []
-    g = grants()
-    expiry = time.time() + 3600
-    for name in allowed:
-        g[name] = expiry
-    STATE.mkdir(exist_ok=True)
-    GRANTS.write_text(json.dumps(g))
-    log_use(allowed, what, "approved by supplying a key with a task for 1 hour")
+    minutes = paste_minutes()
+    _set(allowed, time.time() + minutes * 60, who)
+    log_use(allowed, what, f"given in the chat, so approved for {span(minutes)} ({who})")
     return allowed
 
 
@@ -287,22 +363,19 @@ def ask(names, what, minutes=60, timeout=300, force=False):
     On the phone the person picks how long the approval lasts. Windows Hello or Touch ID on the computer
     approves for `minutes`. The approval covers only these keys.
     """
-    need = granted(names)
+    who = caller()
+    need = granted(names, who)
     if not need:
         return True
     mode, _, auto_minutes = settings()
     tap = list(need) if force == "phone" else needs_tap(need)
     rest = [n for n in need if n not in tap]
     if rest and mode == "auto" and not force:  # approvals off: grant these now and note it in the log
-        g = grants()
-        for n in rest:
-            g[n] = time.time() + auto_minutes * 60
-        STATE.mkdir(exist_ok=True)
-        GRANTS.write_text(json.dumps(g))
-        log_use(rest, what, "allowed (approvals off)")
+        _set(rest, time.time() + auto_minutes * 60, who)
+        log_use(rest, what, f"allowed (approvals off) ({who})")
         rest = []
     if rest:  # ask in the chat: the message hook grants these when the person replies approve
-        add_pending(rest, what)
+        add_pending(rest, what, who)
         print(f"keys: {', '.join(rest)} needs your OK. Ask the person: \"I need {', '.join(rest)}. Reason: {what}. "
               f"Reply approve, or approve 1h.\" Then end your turn, and run this command again after they "
               "approve.", file=sys.stderr)
@@ -338,11 +411,7 @@ def ask(names, what, minutes=60, timeout=300, force=False):
             pass
     if ans and ans.startswith("yes"):
         chosen = float(ans.split(":", 1)[1]) if ":" in ans else minutes
-        g = grants()
-        for n in need:
-            g[n] = time.time() + chosen * 60
-        STATE.mkdir(exist_ok=True)
-        GRANTS.write_text(json.dumps(g))
+        _set(need, time.time() + chosen * 60, who)
         print(f"keys: {', '.join(need)} approved on the {src} for {span(chosen)}.", file=sys.stderr)
         log_use(need, what, f"approved on the {src} for {span(chosen)}")
         return True
@@ -354,10 +423,16 @@ def ask(names, what, minutes=60, timeout=300, force=False):
     return False
 
 
-def lock(names=None):
-    """End the approval for these keys, or for every key."""
-    if not names:
+def lock(names=None, who="all"):
+    """End the approval for these keys (or every key), for one caller or for every caller."""
+    a = _all()
+    for c in list(a):
+        if who != "all" and c != who:
+            continue
+        a[c] = {k: v for k, v in a[c].items() if names and k not in names}
+        if not a[c]:
+            del a[c]
+    if a:
+        _save(GRANTS, {"callers": a})
+    else:
         GRANTS.unlink(missing_ok=True)
-        return
-    g = {k: v for k, v in grants().items() if k not in names}
-    GRANTS.write_text(json.dumps(g))

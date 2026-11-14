@@ -1,6 +1,6 @@
 ---
 name: keywarden
-description: Use keywarden when a task needs API keys or other secrets. Save supplied keys once, use their names in commands, and request expiring access to existing keys. A user supplying a key with a task grants one hour in the default chat mode.
+description: Use keywarden when a task needs API keys or other secrets. Save supplied keys once, use their names in commands, and request expiring access to existing keys. A key the user gives a session with a task works in that session; other sessions and subagents ask.
 ---
 
 # keywarden
@@ -11,8 +11,8 @@ Use saved names such as `OPENAI_API_KEY`. Once saved, pass the value through env
 
 The normal workflow is: they are building something, supply a key with their request, and continue building.
 
-- The prompt integration saves detected keys. In default chat mode, a key supplied with a task receives a one-hour grant because the person explicitly asked to use it. A save-only request stores the key without granting access. Protected keys and phone approval mode retain their stronger checks.
-- Follow the capture notice. If it says a key is saved and approved, confirm exactly: **“Saved as NAME. Approved for 1 hour.”** Then continue their task without asking for the same approval again. Run `keys status` if you need to check the actual grant.
+- The prompt integration saves detected keys. In default chat mode, a key supplied with a task works in that session for 12 hours, because the person asked that session to use it. No other session or subagent gets it without asking. A save-only request stores the key without granting access. Protected keys and phone approval mode retain their stronger checks.
+- Follow the capture notice. If it says a key is saved and approved, confirm exactly: **“Saved as NAME. This session can use it for 12 hours.”** Then continue their task without asking for the same approval again. Run `keys status` if you need to check the actual grant.
 - Claude Code's plugin replaces the value with `[NAME]` before forwarding the message to the model.
 - Codex and Claude's command-hook fallback save the key and continue the task, but cannot replace the submitted message. The raw paste can reach the model and local history. State that limitation when relevant; never claim those paths keep the paste away from the provider.
 - A helper attempts to redact the supplied local transcript in the background. Do not read or edit session files yourself, and do not claim all copies were erased.
@@ -21,7 +21,7 @@ The normal workflow is: they are building something, supply a key with their req
 ## Reuse a saved key
 
 1. Check `keys status` and the saved names provided at session start. Use an existing saved key before asking for its value again.
-2. If it is approved, continue. Grants are shared by local sessions on this computer until expiry or `keys lock`.
+2. If it is approved, continue. A grant belongs to the session (or subagent) that got it. A subagent you start asks for its own: tell the person which key it needs and why, and after they reply approve, have the subagent run `keys grant` again.
 3. If it has expired or is unapproved, run `keys grant NAME --for "what you're doing"`. Request only the keys the task needs, together in one command.
 4. If approval is pending, ask in chat: **“Use NAME for this task? Reply approve, approve 30m, approve 2h, or no.”** End your turn. The user-message hook processes the reply; then retry the command. A plain `approve` grants one hour by default. If they deny, stop using the key.
 5. If phone or local biometric approval is required, tell them where to approve. Do not bypass it.
@@ -46,7 +46,8 @@ Also available: `keys add NAME --from-env VAR`, `keys import FILE.env`, and `key
 ## Changes and limits
 
 - Rename, remove, replace, unprotect, and approval-mode changes must follow their built-in approval flow and the person's instructions.
-- Use `keys lock NAME` to end one grant, or `keys lock` for all grants.
+- Use `keys lock NAME` to end one of this session's grants, or `keys lock` for all of them.
+- Never set, clear or copy `AGENT_KEYS_CALLER`. It says which session is asking, and the hook blocks changes to it.
 - If a hook blocks a command such as `printenv`, reading `.env`, or accessing keywarden's state, pass the key by name through the supported interface. Do not work around the block.
 - These integrations require local hooks and access to the computer's key store. Codex requires hook trust review. Cloud sessions do not inherit local keys or hooks.
 - 1Password and phone/biometric layers are optional; actual vault authentication and hardware approval remain unverified. Do not describe unit tests or fake-backend checks as real-device validation.

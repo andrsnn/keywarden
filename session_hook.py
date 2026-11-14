@@ -12,8 +12,11 @@ def main():
     try:
         import approve
         import keys
+        data = json.loads(sys.stdin.read() or "{}") if not sys.stdin.isatty() else {}
+        codex = "--codex" in sys.argv[1:]
+        sid = data.get("session_id") or ("codex" if codex else "claude")
         names = sorted(keys.existing_names())
-        granted = sorted(approve.grants())
+        granted = sorted(approve.grants(f"codex:{sid}" if codex else sid))
         meta = keys.load_json(keys.META, {})
     except BaseException:
         sys.exit(0)
@@ -24,6 +27,7 @@ def main():
                    if n in meta and (meta[n].get("note") or meta[n].get("kind")) else "") for n in names]
     text = (f"keywarden has these keys saved: {', '.join(listed)}. When a task needs a key, use one of these "
             "before saying you don't have it: run keys grant NAME --for \"why\", then use \"$NAME\" in commands. "
+            "Approvals belong to one session: a subagent you start asks for its own. "
             "Load the keywarden skill for the details.")
     if granted:
         text += f" Granted now: {', '.join(granted)}."

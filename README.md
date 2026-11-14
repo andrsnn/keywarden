@@ -1,6 +1,6 @@
 # keywarden
 
-Coding agents can scatter API keys across project files and chat history. **keywarden saves a key once, grants temporary access, and lets your agent reuse it by name.**
+Coding agents can scatter API keys across project files and chat history. **keywarden saves a key once, lets the session you gave it to use it by name, and asks before any other session or subagent gets it.**
 
 For **Claude Code** and **local Codex**.
 
@@ -8,11 +8,11 @@ For **Claude Code** and **local Codex**.
 
 - 🔁 **One store, both agents.** Save a key with Claude, use it from Codex—or the other way around. No copying keys between tools.
 - 💬 **Stay in the conversation.** Give your agent a task and a key; keywarden saves it while you keep building.
-- ⏳ **One hour to get started.** Supplying a key with a task approves first use. After expiry, choose access in chat.
+- ⏳ **Giving a key is the approval.** The session you give a key to can use it for 12 hours. Any other session, subagent or Codex asks you first.
 - 🔐 **Encrypted storage.** Keys live in your OS key store, with optional 1Password support.
 - 🧹 **Fewer plaintext copies.** Saved-name references, output filtering, and best-effort local transcript cleanup.
 
-<p align="center"><img src="docs/how-it-works.svg" alt="Give your agent a task and a key. keywarden saves it and approves one hour. Later, approve reuse in chat." width="910"></p>
+<p align="center"><img src="docs/how-it-works.svg" alt="Give your agent a task and a key. keywarden saves it and that session can use it. Other sessions ask in chat." width="910"></p>
 
 ## The workflow
 
@@ -24,10 +24,10 @@ For **Claude Code** and **local Codex**.
 You: Build an AI chat app with this OpenAI API key: sk-…
 ```
 
-**3. keywarden saves it and approves access for one hour.** You already asked the agent to use it, so there's no extra approval step. The agent confirms and keeps working:
+**3. keywarden saves it, and this session can use it for 12 hours.** You already asked the agent to use it, so there's no extra approval step. The agent confirms and keeps working:
 
 ```text
-Agent: Saved as OPENAI_API_KEY. Approved for 1 hour.
+Agent: Saved as OPENAI_API_KEY. This session can use it for 12 hours.
 ```
 
 The value lives in your key store. The agent uses `OPENAI_API_KEY` in commands instead of copying the value into your project. A request to **just save** a key stores it without granting access.
@@ -41,7 +41,9 @@ Agent: Use OPENAI_API_KEY for this task?
 You: approve 30m
 ```
 
-No need to find or paste the value again. `approve` alone grants one hour by default. An active grant is shared by local sessions on this computer; it isn't scoped to one project. End access early with `keys lock`.
+No need to find or paste the value again. `approve` alone grants one hour by default.
+
+**Each approval belongs to one session.** A grant goes to the session that asked for it. A subagent that session starts is a separate caller, and so is every other Claude or Codex session, so each one asks before it gets the key. keywarden tells them apart with the session and subagent ids Claude Code and Codex give their hooks. The hook puts a token for that caller in each command, and a command that tries to set or clear the token is blocked. `keys lock` in a session ends that session's approvals. `keys lock` in your own terminal ends everyone's.
 
 **Switch agents freely.** Claude and Codex discover the same saved names, use the same selected backend, and share approvals. You can start a task in Claude and continue in Codex without storing the key again. Locking a key ends access for both.
 
@@ -65,7 +67,7 @@ The installer adds the command, hooks, and skill for both agents, plus Claude's 
 | Protection | What it does |
 | --- | --- |
 | **One key store** | Saves values in macOS Keychain or Windows Credential Manager, instead of scattering plaintext copies through projects. |
-| **One-hour first use** | A key supplied with a task gets temporary access. Later use asks again after expiry. |
+| **Approvals per session** | A key supplied with a task works in that session for 12 hours (`paste_minutes` in config.json). Other sessions and subagents ask, and their approval covers only them. |
 | **Names in commands** | Programs receive approved values through environment variables. Common attempts to print keys or write detected values into files are blocked. |
 | **Filtered output** | Hooked commands replace matching values and their base64 forms with `<concealed by keywarden>`. |
 | **Local cleanup** | A helper attempts transcript redaction in the background without replacing the live file. |
@@ -92,7 +94,7 @@ Start with the local store and chat approvals. These additional integrations exi
 | --- | --- |
 | `keys list` / `keys status` | Find saved keys and see active grants. |
 | `keys note NAME "description"` | Tell agents what a key is for. |
-| `keys lock [NAME]` | End one grant, or all grants. |
+| `keys lock [NAME]` | End one grant, or all of them: this session's from an agent, everyone's from your terminal. |
 | `keys add NAME --clipboard` | Save a copied key without pasting into chat. |
 | `keys import FILE.env` | Save keys from an existing file. |
 | `keys run NAME -- command` | Pass selected keys to a program, with approval. |

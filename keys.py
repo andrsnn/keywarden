@@ -154,7 +154,7 @@ def read_value(name):
         return s.read(name)
     approved = approve.grants()
     if name in approved and not stores.strict():
-        call(stores.cache_fill, s, approved)
+        call(stores.cache_fill, s, approve.all_granted())
         v = stores.cache_read(name)
         if v is not None:
             return v
@@ -511,14 +511,19 @@ def cmd_strict(args):
 
 def cmd_status(args):
     approved, names = approve.grants(), sorted(existing_names())
+    who = approve.caller()
     if stores.strict():
         print("Strict mode is on: keys are read fresh from 1Password, which asks before each new program reads.")
     if approved:
-        print("Approved now. Every command has these as environment variables:")
+        print("Approved for this session. Its commands have these as environment variables:")
         for n in sorted(approved):
             print(f"  {n}  ({_left(approved[n])} left)")
     else:
-        print("No keys are approved right now.")
+        print("No keys are approved for this session." if who != approve.TERMINAL else "No keys are approved here.")
+    others = approve.callers_holding()
+    if others:
+        print(f"{others} other session{'s' if others != 1 else ''} or subagent{'s' if others != 1 else ''} "
+              "hold their own approvals. Each one asks for its own.")
     rest = [n for n in names if n not in approved]
     if rest:
         print("Not approved: " + ", ".join(rest))
@@ -533,7 +538,7 @@ def cmd_env(args):
     each command and evals the output, so values reach the command and never the chat."""
     approved = approve.grants()
     if not approved:
-        if stores.cache_names():
+        if stores.cache_names() and not approve.all_granted():
             stores.cache_clear()  # every approval ran out: delete the 1Password copies
         return
     ps = "--ps" in args
@@ -543,8 +548,8 @@ def cmd_env(args):
         if fresh:
             names = sorted(approved) if stores.strict() else sorted(set(approved) & s.names())
         else:
-            stores.cache_fill(s, approved)
-            names = stores.cache_names()
+            stores.cache_fill(s, approve.all_granted())  # the copies serve every caller; hand out only ours
+            names = sorted(set(stores.cache_names()) & set(approved))
     except stores.StoreError as e:
         print(f"keys: couldn't load keys ({e})", file=sys.stderr)
         return
@@ -570,13 +575,17 @@ def cmd_env(args):
 
 
 def cmd_lock(args):
+    """keys lock [NAME ...]: from an agent, ends that session's approvals. From a terminal, ends everyone's."""
     names = [norm_name(a) for a in args]
-    approve.lock(names or None)
-    if names and store_now().kind == "1password":
-        stores.cache_fill(store_now(), approve.grants())
-    elif not names:
-        stores.cache_clear()
-    print(f"Done. {', '.join(names) if names else 'Every key'} will ask for approval again.")
+    who = approve.caller()
+    approve.lock(names or None, "all" if who == approve.TERMINAL else who)
+    if store_now().kind == "1password":
+        if approve.all_granted():
+            stores.cache_fill(store_now(), approve.all_granted())
+        else:
+            stores.cache_clear()
+    scope = "every session" if who == approve.TERMINAL else "this session"
+    print(f"Done. {', '.join(names) if names else 'Every key'} will ask for approval again in {scope}.")
 
 
 def cmd_rename(args):

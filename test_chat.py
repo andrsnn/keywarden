@@ -8,6 +8,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+os.environ.pop("AGENT_KEYS_CALLER", None)  # run as a person at a terminal, not as the agent running the tests
+
 HERE = Path(__file__).resolve().parent
 tmp = Path(tempfile.mkdtemp(prefix="agent-keys-chat-"))
 env = dict(os.environ, AGENT_KEYS_STATE=str(tmp), AGENT_KEYS_NS="agent-keys-chattest")
@@ -41,7 +43,7 @@ try:
     expect("the message explains the local cleanup limit", "best-effort" in out)
     expect("fallback discloses the original paste", "pasted value can reach" in out)
     expect("the key is in the store", "CLOUDFRONT_KEY" in run("keys.py", "list")[1])
-    out = run("session_hook.py")[1]
+    out = run("session_hook.py", stdin="{}")[1]
     expect("new sessions are told the key names", "CLOUDFRONT_KEY" in out and "K2JC" not in out)
 
     code, out = run("keys.py", "grant", "CLOUDFRONT_KEY", "--for", "testing CloudFront")
@@ -96,7 +98,7 @@ try:
     run("keys.py", "note", "CLOUDFRONT_KEY", "signing key for the CDN")
     out = run("keys.py", "list")[1]
     expect("keys list shows the note and the source", "signing key for the CDN" in out and "pasted in" in out)
-    expect("new sessions see the note", "signing key for the CDN" in run("session_hook.py")[1])
+    expect("new sessions see the note", "signing key for the CDN" in run("session_hook.py", stdin="{}")[1])
     run("keys.py", "add", "OTHER_TOKEN", "--note", "a second key", stdin="ot_" + "x7Qp2" * 6)
     m = json.loads((tmp / "meta.json").read_text()).get("OTHER_TOKEN", {})
     expect("keys add keeps a note and how it was added", m.get("note") == "a second key"
@@ -109,9 +111,9 @@ try:
            "[MAPS_API_KEY] and get the map tiles" and out.get("saved") == [["MAPS_API_KEY", "saved"]])
     expect("rewrite saves the key", "MAPS_API_KEY" in run("keys.py", "list")[1])
     expect("a task supplied with the key is approved immediately", out.get("approved") == ["MAPS_API_KEY"])
-    expect("Codex discovers a key Claude saved in the local store", "MAPS_API_KEY" in run("session_hook.py", "--codex")[1])
+    expect("Codex discovers a key Claude saved in the local store", "MAPS_API_KEY" in run("session_hook.py", "--codex", stdin="{}")[1])
     code, granted = run("keys.py", "grant", "MAPS_API_KEY", "--for", "continue in Codex")
-    expect("Codex reuses Claude's local-store grant without another approval", code == 0 and "Reply approve" not in granted)
+    expect("another caller asks for a key a session was given", code != 0 and "Reply approve" in granted)
     expect("the rewritten message passes the settings hook", '"block"' not in say(out["text"]))
     out = json.loads(run("prompt_hook.py", "--rewrite", stdin=json.dumps({"prompt": "fix the bug in a.ts"}))[1])
     expect("rewrite leaves a message with no key alone", out == {"text": "fix the bug in a.ts", "saved": []})

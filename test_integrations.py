@@ -5,6 +5,7 @@ Uses a fake 1Password CLI, temporary settings and synthetic keys; no real agent 
 import contextlib
 import io
 import json
+import re
 import os
 import secrets
 import shutil
@@ -19,6 +20,8 @@ from unittest.mock import patch
 import hook
 import install
 from test_backends import FAKE_OP
+
+os.environ.pop("AGENT_KEYS_CALLER", None)  # run as a person at a terminal, not as the agent running the tests
 
 HERE = Path(__file__).resolve().parent
 
@@ -106,10 +109,18 @@ class CodexFlowTests(unittest.TestCase):
                         FAKE_OP_DB=str(self.root / "op.json"))
         self.value = "demo_" + "Aq9vJ2xB7p" * 4
 
-    def run_script(self, script, *args, data=None, stdin=None):
-        return subprocess.run([sys.executable, str(HERE / script), *args], env=self.env,
+    def run_script(self, script, *args, data=None, stdin=None, token=None):
+        env = dict(self.env, AGENT_KEYS_CALLER=token) if token else self.env
+        return subprocess.run([sys.executable, str(HERE / script), *args], env=env,
                               input=json.dumps(data) if data is not None else stdin,
                               text=True, capture_output=True, timeout=20)
+
+    def token(self, codex=False):
+        """The caller token the hook gives this test's chat (no session id, so "claude" or "codex:codex")."""
+        result = self.run_script("hook.py", *(["--codex"] if codex else []),
+                                 data={"tool_name": "Bash", "tool_input": {"command": "keys status"}})
+        command = json.loads(result.stdout)["hookSpecificOutput"]["updatedInput"]["command"]
+        return re.search(r"AGENT_KEYS_CALLER(?:=| = ')([\w-]+)", command).group(1)
 
     def save(self):
         result = self.run_script("keys.py", "add", "DEMO_API_KEY", stdin=self.value)
@@ -120,8 +131,8 @@ class CodexFlowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout) if result.stdout else {}
 
-    def grant(self):
-        return self.run_script("keys.py", "grant", "DEMO_API_KEY", "--for", "testing the API")
+    def grant(self, token=None):
+        return self.run_script("keys.py", "grant", "DEMO_API_KEY", "--for", "testing the API", token=token)
 
     def test_save_only_paste_is_saved_and_continues_without_grant(self):
         out = self.message("key DEMO_API_KEY " + self.value)
@@ -137,27 +148,30 @@ class CodexFlowTests(unittest.TestCase):
         self.assertNotIn(self.value, meta)
         self.assertEqual(self.message("use DEMO_API_KEY"), {})
 
-    def test_task_paste_approves_one_hour_then_expiry_requires_chat(self):
+    def test_task_paste_approves_the_session_then_expiry_requires_chat(self):
         before = time.time()
         out = self.message("Build an app using this key.\nkey DEMO_API_KEY " + self.value)
-        self.assertIn("Saved as DEMO_API_KEY. Approved for 1 hour.", out["systemMessage"])
-        grants = json.loads((self.state / "grants.json").read_text())
-        self.assertGreaterEqual(grants["DEMO_API_KEY"], before + 3600)
-        self.assertLess(grants["DEMO_API_KEY"], time.time() + 3601)
-        self.assertEqual(self.grant().returncode, 0)
+        self.assertIn("Saved as DEMO_API_KEY. This session can use it for 12 hours.", out["systemMessage"])
+        grants = json.loads((self.state / "grants.json").read_text())["callers"]
+        self.assertEqual(list(grants), ["codex:codex"])  # only the chat it was given in
+        self.assertGreaterEqual(grants["codex:codex"]["DEMO_API_KEY"], before + 12 * 3600)
+        self.assertLess(grants["codex:codex"]["DEMO_API_KEY"], time.time() + 12 * 3600 + 1)
+        me = self.token(codex=True)
+        self.assertEqual(self.grant(me).returncode, 0)
+        self.assertNotEqual(self.grant().returncode, 0)  # a terminal or other agent still asks
         self.assertNotIn(self.value, (self.state / "use.log").read_text())
         self.assertEqual(json.loads((self.state / "config.json").read_text()).get("approvals", "chat"), "chat")
-        (self.state / "grants.json").write_text(json.dumps({"DEMO_API_KEY": time.time() - 1}))
+        (self.state / "grants.json").write_text(json.dumps({"callers": {"codex:codex": {"DEMO_API_KEY": time.time() - 1}}}))
         self.assertEqual(self.message("Build another app with DEMO_API_KEY"), {})
-        self.assertNotEqual(self.grant().returncode, 0)
+        self.assertNotEqual(self.grant(me).returncode, 0)
         out = self.message("approve 30m")
         self.assertIn("for 30 minutes", out["hookSpecificOutput"]["additionalContext"])
-        self.assertEqual(self.grant().returncode, 0)
+        self.assertEqual(self.grant(me).returncode, 0)
         self.run_script("keys.py", "lock")
-        self.grant()
+        self.grant(me)
         self.assertIn("for 2 hours", json.dumps(self.message("approve 2h")))
         self.run_script("keys.py", "lock")
-        self.grant()
+        self.grant(me)
         self.assertIn("for 1 hour", json.dumps(self.message("approve")))
 
     def test_task_paste_respects_stronger_approval_settings(self):
@@ -165,7 +179,7 @@ class CodexFlowTests(unittest.TestCase):
             with self.subTest(extra=extra):
                 (self.state / "config.json").write_text(json.dumps({"backend": "1password", "strict": True, **extra}))
                 out = self.message("Build an app with this key.\nkey DEMO_API_KEY " + self.value)
-                self.assertNotIn("Approved for 1 hour", out["systemMessage"])
+                self.assertNotIn("can use it", out["systemMessage"])
                 self.assertFalse((self.state / "grants.json").exists())
                 self.assertIn("Request approval", out["hookSpecificOutput"]["additionalContext"])
 
@@ -188,11 +202,11 @@ class CodexFlowTests(unittest.TestCase):
         out = json.loads(result.stdout)
         self.assertEqual(out["text"], "Build an app with this key.\nkey DEMO_API_KEY [DEMO_API_KEY]")
         self.assertEqual(out["approved"], ["DEMO_API_KEY"])
-        self.assertEqual(out["notice"], "Saved as DEMO_API_KEY. Approved for 1 hour.")
+        self.assertEqual(out["notice"], "Saved as DEMO_API_KEY. This session can use it for 12 hours.")
         self.assertNotIn(self.value, result.stdout)
-        self.assertEqual(self.grant().returncode, 0)
+        self.assertEqual(self.grant(self.token()).returncode, 0)
 
-    def test_claude_and_codex_share_store_grants_and_lock(self):
+    def test_claude_and_codex_share_the_store_but_not_grants(self):
         request = "Build an app with this key.\nkey DEMO_API_KEY " + self.value
         out = self.run_script("prompt_hook.py", "--rewrite", data={"prompt": request})
         self.assertEqual(json.loads(out.stdout)["approved"], ["DEMO_API_KEY"])
@@ -208,11 +222,12 @@ class CodexFlowTests(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertEqual(run.stdout.strip(), "loaded")
 
-        use_with(["--codex"])  # A key captured and approved by Claude works in Codex.
-        self.run_script("keys.py", "lock", "DEMO_API_KEY")
-        self.assertNotEqual(self.grant().returncode, 0)
-        self.message("approve 30m")  # Approval entered in Codex works in Claude too.
-        use_with([])
+        use_with([])  # The Claude chat the key was given in can use it.
+        codex = self.run_script("hook.py", "--codex", data={"tool_name": "Bash", "tool_input": {"command": command}})
+        self.assertEqual(codex.stdout, "")  # Codex gets nothing until it asks and the person approves.
+        self.assertNotEqual(self.grant(self.token(codex=True)).returncode, 0)
+        self.message("approve 30m")
+        use_with(["--codex"])
         self.run_script("keys.py", "lock")
         for agent_args in ([], ["--codex"]):
             result = self.run_script("hook.py", *agent_args,
@@ -230,12 +245,13 @@ class CodexFlowTests(unittest.TestCase):
 
     def test_approve_run_mask_and_lock(self):
         self.save()
-        self.assertNotEqual(self.grant().returncode, 0)
+        me = self.token(codex=True)
+        self.assertNotEqual(self.grant(me).returncode, 0)
         self.assertEqual(self.message("please explain"), {})
         self.assertFalse((self.state / "grants.json").exists())
         out = self.message("approve 1h")
         self.assertIn("approved DEMO_API_KEY for 1 hour", out["hookSpecificOutput"]["additionalContext"])
-        self.assertEqual(self.grant().returncode, 0)
+        self.assertEqual(self.grant(me).returncode, 0)
         tool_input = {"command": "python3 -c 'import os; print(os.environ[\"DEMO_API_KEY\"])'", "description": "demo"}
         result = self.run_script("hook.py", "--codex", data={"tool_name": "Bash", "tool_input": tool_input})
         out = json.loads(result.stdout)["hookSpecificOutput"]

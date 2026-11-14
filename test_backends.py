@@ -12,6 +12,8 @@ import tempfile
 import time
 from pathlib import Path
 
+os.environ.pop("AGENT_KEYS_CALLER", None)  # run as a person at a terminal, not as the agent running the tests
+
 HERE = Path(__file__).resolve().parent
 FAKE_OP = r'''
 import json, os, sys
@@ -61,7 +63,8 @@ def main():
 
     def approve_now(names=("K_ONE", "K_TWO"), minutes=10):  # stands in for a phone approval of these keys
         (tmp / "state").mkdir(exist_ok=True)
-        (tmp / "state" / "grants.json").write_text(json.dumps({n: time.time() + minutes * 60 for n in names}))
+        (tmp / "state" / "grants.json").write_text(json.dumps(
+            {"callers": {"terminal": {n: time.time() + minutes * 60 for n in names}}}))
 
     sys.path.insert(0, str(HERE))
     os.environ.update(AGENT_KEYS_NS="agent-keys-test", AGENT_KEYS_STATE=str(tmp / "state"))
@@ -121,7 +124,8 @@ def main():
 
         approve_now()
         keys("env")
-        (tmp / "state" / "grants.json").write_text(json.dumps({"K_ONE": time.time() - 1, "K_TWO": time.time() - 1}))
+        (tmp / "state" / "grants.json").write_text(json.dumps(
+            {"callers": {"terminal": {"K_ONE": time.time() - 1, "K_TWO": time.time() - 1}}}))
         keys("env")
         expect("copies wiped when the approval runs out", not local_store.names("agent-keys-test-cache"))
 

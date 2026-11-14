@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 910 260" width="910" height="260" role="img" aria-labelledby="title desc" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
   <title id="title">Give a task and key. Keep building. Reuse later.</title>
-  <desc id="desc">Give your agent a task and an API key. keywarden saves the key and approves one hour. After expiry, approve reuse in chat. Local redaction is best-effort.</desc>
+  <desc id="desc">Give your agent a task and an API key. keywarden saves the key and that session can use it. Other sessions and subagents ask in chat. Local redaction is best-effort.</desc>
   <style>
     .bg { fill:#ffffff; } .box { fill:#f6f8fa; stroke:#d0d7de; }
     .vault { fill:#eef4ff; stroke:#0969da; } .use { fill:#effaf3; stroke:#1a7f37; }
@@ -22,7 +22,7 @@
   <path class="arrow" d="M291 105 H320 l-7 -5 m7 5 l-7 5"/>
   <rect class="box" x="325" y="25" width="260" height="160" rx="12"/>
   <text class="t" x="345" y="59" font-size="20" font-weight="700">2. Keep building</text>
-  <text class="code" x="345" y="92">"Approved for 1 hour."</text>
+  <text class="code" x="345" y="92">"Usable here for 12 hours."</text>
   <text class="t" x="345" y="126" font-size="15">Saved once. First use approved.</text>
   <text class="muted" x="345" y="153" font-size="13">You already asked to use the key.</text>
   <path class="arrow" d="M596 105 H625 l-7 -5 m7 5 l-7 5"/>

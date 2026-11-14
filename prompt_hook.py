@@ -84,6 +84,13 @@ def scrub_later(transcript, values):
     return p
 
 
+def session_caller(data, agent):
+    """The caller a pasted key goes to: the session the person typed into. The same name hook.py gives that
+    session's own commands (a subagent's commands carry its agent id too, so they don't match)."""
+    sid = data.get("session_id") or ("codex" if agent == "Codex" else "claude")
+    return f"codex:{sid}" if agent == "Codex" else sid
+
+
 def capture(data, agent):
     """Save detected values, then derive consent from the user's sanitized request. Never return values."""
     import approve
@@ -98,11 +105,14 @@ def capture(data, agent):
     if keys.find_keys(text):
         raise ValueError("a detected value remained after replacement")
     names = [name for name, _ in results]
-    approved = approve.grant_from_prompt(names, text) if requests_use(text) else []
+    who = session_caller(data, agent)
+    approved = approve.grant_from_prompt(names, text, who) if requests_use(text) else []
     pending = [name for name in names if name not in approved]
     notice = ". ".join(f"Saved as {name}" for name in names) + "."
+    span = approve.span(approve.paste_minutes())
     if approved:
-        notice += " Approved for 1 hour." if not pending else f" {', '.join(approved)} approved for 1 hour."
+        notice += (f" This session can use it for {span}." if not pending
+                   else f" This session can use {', '.join(approved)} for {span}.")
     context = (f"keywarden: {notice} Tell the person this confirmation, then continue their task. "
                f"Use the saved names {', '.join(names)}; never repeat or write the values. "
                'Run keys status, then use "$NAME" in commands. ')

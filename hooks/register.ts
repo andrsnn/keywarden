@@ -2,7 +2,8 @@ import type { Register } from 'claude-code'
 
 // When you paste a key, keywarden saves it and swaps it for [NAME] in your message, and the message goes on to
 // Claude without the key. This runs before Claude Code's own UserPromptSubmit hooks, so keywarden's
-// prompt_hook.py then sees no key. Supplying a key with a task authorizes one hour in chat mode.
+// prompt_hook.py then sees no key. Supplying a key with a task lets this session use it (12 hours by default),
+// and no other session or subagent.
 // The command-hook fallback saves and continues too, but cannot replace the original prompt.
 export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
@@ -13,7 +14,7 @@ export const register: Register = on => {
       python = (await $.fs.read(`${root}/hooks/python-path.txt`)).trim() || python // written by install.py
     } catch {}
     const run = await $.process.run([python, `${root}/prompt_hook.py`, '--rewrite'], {
-      stdin: JSON.stringify({ prompt: e.text, cwd: await $.session.cwd() }),
+      stdin: JSON.stringify({ prompt: e.text, cwd: await $.session.cwd(), session_id: await $.session.id() }),
       timeoutMs: 20000,
     })
     if (run.exitCode !== 0) return next(e)

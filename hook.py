@@ -2,8 +2,11 @@
 """Claude Code PreToolUse hook from keywarden.
 
 1. It stops tool calls that would print a key into the chat, like printenv or cat .env.
-2. While keys are approved, it adds a line to the start of each Bash or PowerShell command that loads every key
-   as an environment variable, so the agent can use "$NAME" with any tool without seeing the value.
+2. It puts the caller's token in each Bash or PowerShell command (AGENT_KEYS_CALLER). The caller is the session,
+   plus the subagent when a subagent runs the command. keys.py uses the token to know who is asking, so a grant
+   reaches only the session or subagent it was given to.
+3. While that caller has keys approved, it adds a line to the start of the command that loads them as environment
+   variables, so the agent can use "$NAME" with any tool without seeing the value.
 
 The blocking only catches the usual ways a key gets printed. A determined command can still print one.
 """
@@ -43,6 +46,10 @@ SHELL_RULES = [
      r"|\bkeyring\s+get\b|(?:import|from)\s+local_store\b|local_store\.(?:read|names)\(",
      "reads a key straight from the key store, skipping approval"),
     (r"(?i)\.agent-keys\b", "touches keywarden's own files, which say who approved what"),
+    # Setting or clearing the caller token would let a command ask for keys as another session.
+    (r"(?i)AGENT_KEYS_CALLER\W{0,3}\s*(?:=|:=)|(?:unset|-u|--unset)[\s=]+AGENT_KEYS_CALLER"
+     r"|(?:remove-item|rm|del)\s+env:\\?AGENT_KEYS_CALLER|(?:pop|del|unsetenv|setenv|putenv)\W{0,3}\s*\(?\W{0,2}"
+     r"AGENT_KEYS_CALLER|SetEnvironmentVariable\W+AGENT_KEYS_CALLER", "changes which session is asking for keys"),
 ]
 SHELL_RULES = [(re.compile(p), why) for p, why in SHELL_RULES]
 ENV_PATH = re.compile(r"(?:^|[\\/])" + ENV_FILE + r"$", re.I)
@@ -152,36 +159,59 @@ def main():
     # mask.py so a key value that gets printed (curl -v, env, a debug line) shows as <concealed by keywarden>.
     # The command text only gets the lines that load the keys, so values never appear in the chat.
     inp, tool = data.get("tool_input") or {}, data.get("tool_name")
-    if tool in ("Bash", "PowerShell") and inp.get("command") and approved():
+    if tool in ("Bash", "PowerShell") and inp.get("command"):
         codex = "--codex" in sys.argv[1:]
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import approve
+            who = caller_of(data, codex)
+            token = approve.token_for(who)
+            has_keys = approve.active(who)
+        except Exception:
+            sys.exit(0)
+        # Codex needs "allow" alongside a changed command, which skips its own approval prompt, so on Codex the
+        # command only changes when it loads keys or calls keys itself.
+        if codex and not has_keys and not KEYS_CMD.search(inp["command"]):
+            sys.exit(0)
         shell = "PowerShell" if codex and os.name == "nt" and tool == "Bash" else tool
-        out = {"hookEventName": "PreToolUse", "updatedInput": dict(inp, command=wrap(shell, inp["command"]))}
+        cmd = wrap(shell, inp["command"], token) if has_keys else tag(shell, inp["command"], token)
+        out = {"hookEventName": "PreToolUse", "updatedInput": dict(inp, command=cmd)}
         if codex:
             out["permissionDecision"] = "allow"  # Codex requires this with updatedInput.
         print(json.dumps({"hookSpecificOutput": out}))
     sys.exit(0)
 
 
-def wrap(tool, cmd):
+KEYS_CMD = re.compile(r"\bkeys(?:\.py)?\b")
+
+
+def caller_of(data, codex=False):
+    """Who runs this command: the session, plus the subagent or teammate when one runs it."""
+    sid = data.get("session_id") or ("codex" if codex else "claude")
+    agent = data.get("agent_id")
+    return f"{'codex:' if codex else ''}{sid}" + (f"/{agent}" if agent else "")
+
+
+def tag(tool, cmd, token):
+    """Only say who is asking, for a caller with no keys approved."""
+    if tool == "Bash":
+        return f"export AGENT_KEYS_CALLER={token}; {cmd}"
+    return f"$env:AGENT_KEYS_CALLER = '{token}'; {cmd}"
+
+
+def wrap(tool, cmd, token):
     if tool == "Bash":
         # The filters run as process substitutions on fds 8 and 9. After the command, close them and wait up to
         # 5 seconds for the filters to finish writing, or Bash returns before the output arrives. A background job
         # the command started can keep a filter open, so the wait has a limit instead of using `wait`.
-        return (f'eval "$({KEYS} env)"; exec 8> >({MASK}); __kw1=$!; exec 9> >({MASK} >&2); __kw2=$!; '
+        return (f'export AGENT_KEYS_CALLER={token}; eval "$({KEYS} env)"; exec 8> >({MASK}); __kw1=$!; '
+                f'exec 9> >({MASK} >&2); __kw2=$!; '
                 f'{{ {cmd}\n}} >&8 2>&9; __kws=$?; exec 8>&- 9>&-; __kwi=0; '
                 'while { kill -0 $__kw1 || kill -0 $__kw2; } 2>/dev/null && [ $__kwi -lt 50 ]; '
                 'do sleep 0.1; __kwi=$((__kwi+1)); done; (exit $__kws)')
     ps_keys, ps_mask = KEYS.replace('"', "'"), MASK.replace('"', "'")
-    return (f"& {ps_keys} env --ps | Out-String | Invoke-Expression; "
+    return (f"$env:AGENT_KEYS_CALLER = '{token}'; & {ps_keys} env --ps | Out-String | Invoke-Expression; "
             f"& {{ {cmd}\n}} 2>&1 | ForEach-Object {{ \"$_\" }} | & {ps_mask}")
-
-
-def approved():
-    try:
-        now = time.time()
-        return any(isinstance(v, (int, float)) and v > now for v in json.loads(GRANTS.read_text()).values())
-    except Exception:
-        return False
 
 
 if __name__ == "__main__":

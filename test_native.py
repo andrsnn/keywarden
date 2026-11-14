@@ -18,6 +18,8 @@ from unittest.mock import patch
 import install
 from test_integrations import CodexFlowTests
 
+os.environ.pop("AGENT_KEYS_CALLER", None)  # run as a person at a terminal, not as the agent running the tests
+
 HERE = Path(__file__).resolve().parent
 BUNDLED_CODEX = Path('/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex')
 
@@ -109,9 +111,11 @@ def main():
         def check_saved_and_granted():
             db = json.loads((case.root / 'op.json').read_text())
             assert db['vaults']['Agent Keys']['OPENAI_API_KEY'] == case.value
-            grants = json.loads((case.state / 'grants.json').read_text())
-            assert 3500 < grants['OPENAI_API_KEY'] - time.time() <= 3600
-            assert any(b'Saved as OPENAI_API_KEY. Approved for 1 hour.' in body for body in server.requests)
+            grants = json.loads((case.state / 'grants.json').read_text())['callers']
+            assert len(grants) == 1  # only the session the key was given in
+            assert 12 * 3600 - 100 < list(grants.values())[0]['OPENAI_API_KEY'] - time.time() <= 12 * 3600
+            assert any(b'Saved as OPENAI_API_KEY. This session can use it for 12 hours.' in body
+                       for body in server.requests)
         if claude:
             plugin = case.root / 'plugin'
             shutil.copytree(HERE, plugin, ignore=shutil.ignore_patterns('.git', '__pycache__'))
