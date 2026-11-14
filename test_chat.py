@@ -61,6 +61,25 @@ try:
     expect("approve after no does nothing", "additionalContext" not in say("yes"))
     expect("still no grant", not handed_over())
 
+    def age_request(hours):  # make the waiting request look this old
+        reqs = json.loads((tmp / "pending.json").read_text())
+        for r in reqs:
+            r["at"] -= hours * 3600
+        (tmp / "pending.json").write_text(json.dumps(reqs))
+
+    run("keys.py", "grant", "CLOUDFRONT_KEY", "--for", "an hour ago")
+    age_request(1)
+    expect("a loose yes doesn't answer a request over 30 minutes old", "additionalContext" not in say("yes"))
+    out = say("approve")
+    expect("approve answers a request from an hour ago", "approved CLOUDFRONT_KEY" in out)
+    expect("the late approve gives the key", handed_over())
+    run("keys.py", "lock")
+    run("keys.py", "grant", "CLOUDFRONT_KEY", "--for", "yesterday")
+    age_request(13)
+    expect("approve doesn't answer a request over 12 hours old", "additionalContext" not in say("approve"))
+    expect("no grant from the stale request", not handed_over())
+    (tmp / "pending.json").unlink(missing_ok=True)
+
     tid = "b7e1c90d42a6f3815"
     notice = (f"<task-notification>\n<task-id>{tid}</task-id>\n<output-file>C:\\AI\\cache\\tmp\\claude\\"
               f"c3d9e8f71a2b4c5d\\9a8b7c6d-1e2f-4a5b-8c7d-6e5f4a3b2c1d\\tasks\\{tid}.output</output-file>\n"

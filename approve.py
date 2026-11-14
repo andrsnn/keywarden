@@ -219,25 +219,26 @@ def needs_tap(names):
 
 
 PENDING = STATE / "pending.json"
-PENDING_MINUTES = 30
+PENDING_MINUTES = 30  # a loose reply (yes, ok, sure) answers requests this recent
+APPROVE_WORD_MINUTES = 12 * 60  # the word approve answers requests this recent, so a late reply still works
 
 
-def pending():
-    """Requests waiting for your OK in the chat: [{names, what, at}] from the last 30 minutes."""
+def pending(max_minutes=PENDING_MINUTES):
+    """Requests waiting for your OK in the chat: [{names, what, at}] from the last max_minutes."""
     now = time.time()
-    return [r for r in _load(PENDING, []) if isinstance(r, dict) and now - r.get("at", 0) < PENDING_MINUTES * 60]
+    return [r for r in _load(PENDING, []) if isinstance(r, dict) and now - r.get("at", 0) < max_minutes * 60]
 
 
 def add_pending(names, what):
-    reqs = [r for r in pending() if set(r["names"]) != set(names)]
+    reqs = [r for r in pending(APPROVE_WORD_MINUTES) if set(r["names"]) != set(names)]
     reqs.append({"names": sorted(names), "what": what[:200], "at": time.time()})
     STATE.mkdir(exist_ok=True)
     PENDING.write_text(json.dumps(reqs))
 
 
-def answer_pending(yes, minutes=None):
+def answer_pending(yes, minutes=None, max_age=PENDING_MINUTES):
     """Called by the message hook when you reply approve or no. Returns the key names it applied to."""
-    reqs = pending()
+    reqs = pending(max_age)
     PENDING.unlink(missing_ok=True)
     names = sorted({n for r in reqs for n in r["names"]})
     if yes and names:

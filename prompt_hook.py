@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 APPROVE = re.compile(r"(?i)^\s*(?:approve[sd]?|yes|yep|yeah|y|ok|okay|allow|allowed|sure|go ahead|do it|grant)\b")
+APPROVE_WORD = re.compile(r"(?i)^\s*approve[sd]?\b")
 DENY = re.compile(r"(?i)^\s*(?:no|nope|deny|denied|don'?t|stop)\b")
 NOTICES = ("<task-notification", "<system-reminder", "<command-", "<local-command", "<bash-", "<user-memory",
            "Another Claude session", "[SYSTEM NOTIFICATION")
@@ -150,15 +151,18 @@ def main():
         tell_agent(out["context"] + disclosure, out["notice"] + disclosure)
     try:
         import approve
-        if len(text) <= 80 and approve.pending():
+        # The word approve (or no) answers a request from up to 12 hours ago. A loose yes or ok only
+        # answers one from the last 30 minutes, so it can't grant an old request by accident.
+        window = approve.APPROVE_WORD_MINUTES if APPROVE_WORD.match(text) or DENY.match(text) else approve.PENDING_MINUTES
+        if len(text) <= 80 and approve.pending(window):
             if APPROVE.match(text):
                 minutes = minutes_in(text)
-                names = approve.answer_pending(True, minutes)
+                names = approve.answer_pending(True, minutes, window)
                 span = approve.span(minutes or approve.settings()[2])
                 tell_agent(f"keywarden: the person approved {', '.join(names)} for {span}. "
                             "Run the command that asked for it again.")
             if DENY.match(text):
-                names = approve.answer_pending(False)
+                names = approve.answer_pending(False, max_age=window)
                 tell_agent(f"keywarden: the person said no to {', '.join(names)}. Don't ask again.")
     except SystemExit:
         raise
