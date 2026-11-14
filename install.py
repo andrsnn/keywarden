@@ -92,7 +92,7 @@ def install_plugin():
     installed = claude("plugin", "install", "keywarden@keywarden", "--scope", "user")
     updated = claude("plugin", "update", "keywarden@keywarden", "--scope", "user")
     if installed or updated:
-        say("Claude plugin: ready (pasted keys are replaced with names; supplying a task grants 1 hour)")
+        say("Claude plugin: ready (pasted keys are replaced with names; a key given with a task works in that session only)")
     else:
         say("Claude plugin: not installed. Run  claude plugin marketplace add " + str(REPO) +
             "  and then  claude plugin install keywarden@keywarden")
@@ -178,7 +178,7 @@ def install_codex():
     write_settings(d, CODEX_HOOKS)
     say(f"Codex hooks: added to {CODEX_HOOKS}")
     say("Codex: restart, then review and trust keywarden in /hooks (desktop: Settings > Hooks).")
-    say("Codex: keys supplied with a task are saved and approved for 1 hour; the task continues.")
+    say("Codex: a key given with a task is saved and works in that session only; the task continues.")
     say("Codex: the original paste can reach the model/history. Local redaction is best-effort.")
 
 
