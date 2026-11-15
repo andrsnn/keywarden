@@ -92,7 +92,10 @@ def install_plugin():
     installed = claude("plugin", "install", "keywarden@keywarden", "--scope", "user")
     updated = claude("plugin", "update", "keywarden@keywarden", "--scope", "user")
     if installed or updated:
-        say("Claude plugin: ready (pasted keys are replaced with names; approval controls are optional)")
+        if claude("plugin", "enable", "keywarden@keywarden", "--scope", "user"):
+            say("Claude plugin: enabled. Restart Claude Code to load prompt replacement.")
+        else:
+            say("Claude plugin: installed but could not be enabled. Run claude plugin enable keywarden@keywarden --scope user, then restart Claude Code.")
     else:
         say("Claude plugin: not installed. Run  claude plugin marketplace add " + str(REPO) +
             "  and then  claude plugin install keywarden@keywarden")

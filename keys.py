@@ -1141,7 +1141,13 @@ def scrub_values(supplied):
     return values
 
 
-COMMANDS = {"_scrub": cmd_scrub, "note": cmd_note, "setup": cmd_setup, "switch": cmd_switch, "strict": cmd_strict, "approvals": cmd_approvals,
+def cmd_capture(args):
+    """Private stdin/stdout bridge used by the prompt plugin through any supported CLI launcher."""
+    from prompt_hook import rewrite
+    rewrite()
+
+
+COMMANDS = {"_capture": cmd_capture, "_scrub": cmd_scrub, "note": cmd_note, "setup": cmd_setup, "switch": cmd_switch, "strict": cmd_strict, "approvals": cmd_approvals,
             "protect": cmd_protect, "unprotect": cmd_unprotect, "phone": cmd_phone, "remove": cmd_remove, "lock": cmd_lock, "grant": cmd_grant, "status": cmd_status, "env": cmd_env, "add": cmd_add, "import": cmd_import, "list": cmd_list, "rename": cmd_rename, "ref": cmd_ref,
             "run": cmd_run, "rescue": cmd_rescue}
 

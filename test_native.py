@@ -122,14 +122,18 @@ def main(mode):
             assert len(grants) == 1  # only the session the key was given in
             duration = 12 * 3600 if mode == 'chat' else 3600
             assert duration - 100 < list(grants.values())[0]['OPENAI_API_KEY'] - time.time() <= duration
-            notice = (b'Saved as OPENAI_API_KEY. This session can use it for 12 hours.' if mode == 'chat' else
-                      b'Saved as OPENAI_API_KEY. Ready for Claude Code, Codex, and their subagents.')
+            notice = (b'Saved OPENAI_API_KEY to keywarden. Approved for this session (12 hours).' if mode == 'chat' else
+                      b'Saved OPENAI_API_KEY to keywarden. Ready to use.')
             assert any(notice in body
                        for body in server.requests)
         if claude:
             plugin = case.root / 'plugin'
             shutil.copytree(HERE, plugin, ignore=shutil.ignore_patterns('.git', '__pycache__'))
-            (plugin / 'hooks/python-path.txt').write_text(sys.executable)
+            hint = plugin / 'hooks/python-path.txt'
+            if mode == 'auto':
+                hint.unlink(missing_ok=True)  # Marketplace packages need not contain this ignored local hint.
+            else:
+                hint.write_text(str(case.root / 'missing-python'))  # Moving machines must not break replacement.
             settings = {'hooks': {'UserPromptSubmit': [{'hooks': [{
                 'type': 'command', 'command': f'"{sys.executable}" "{plugin / "prompt_hook.py"}"'}]}]}}
             base = [claude, '-p', '--no-session-persistence', '--setting-sources', '', '--strict-mcp-config',

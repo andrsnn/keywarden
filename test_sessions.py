@@ -69,7 +69,7 @@ try:
     msg = "here is my weather api key, save this: " + VALUE + " and get the forecast"
     out = json.loads(run("prompt_hook.py", "--rewrite", stdin=json.dumps({"prompt": msg, "session_id": "S1"}))[1])
     expect("giving a key with a task approves it at once", out.get("approved") == ["WEATHER_API_KEY"]
-           and "This session can use it" in out.get("notice", ""))
+           and "Approved for this session" in out.get("notice", ""))
     expect("the session the key was given to gets it", gets_key(s1))
     expect("its subagent doesn't", not gets_key(s1_sub))
     expect("another session doesn't", not gets_key(s2))

@@ -11,7 +11,7 @@ Use saved names such as `OPENAI_API_KEY`. Pass values through environment variab
 
 - The user gives you a task and a key. The prompt integration saves detected keys, tells you their names, and confirms the actual access mode.
 - Approval controls are **off by default**. Ordinary saved keys work automatically in Claude Code, Codex, other sessions, and their subagents. Do not ask the user to type approve in this mode.
-- Follow the capture notice. In automatic mode, confirm: **“Saved as NAME. Ready for Claude Code, Codex, and their subagents.”** Then continue the task.
+- Follow the capture notice in a short, normal reply: **“Saved NAME to keywarden. Ready to use.”** If access controls are enabled, use the actual approval duration from the notice. Do not quote hook names or implementation details. Continue the task after confirming.
 - Check `keys status` when unsure which mode is active. Explicitly protected keys still require their extra approval even when controls are off.
 - Claude's plugin replaces detected values with names before forwarding. Codex and Claude's command-hook fallback continue with the original prompt, so the pasted value can reach the model and local history. Local transcript cleanup is best-effort; do not claim every copy was erased.
 - If a pasted value was not detected, don't put it into another logged tool call to save it. Ask the person to run `keys add NAME --clipboard` in their terminal. This also works for users who prefer to keep values out of chat entirely.

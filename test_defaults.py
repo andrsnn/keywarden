@@ -112,7 +112,7 @@ class AccessModeTests(unittest.TestCase):
         self.assertFalse(self.env_has_key(sub))
         capture = self.run_script('prompt_hook.py', data={'session_id': 'S1', 'prompt': 'key DEMO_API_KEY ' + self.value})
         out = json.loads(capture.stdout)
-        self.assertNotIn('Ready for', out['systemMessage'])
+        self.assertIn('Approval needed before use', out['hookSpecificOutput']['additionalContext'])
         self.assertFalse(self.env_has_key(main))
         (self.state / 'grants.json').write_text(json.dumps({'callers': {'S1': {'DEMO_API_KEY': time.time() + 60}}}))
         self.assertTrue(self.env_has_key(main))
@@ -134,7 +134,7 @@ class AccessModeTests(unittest.TestCase):
         r = self.run_script('prompt_hook.py', '--rewrite', data={'session_id': 'S1',
                            'prompt': 'Build an app with this key.\nkey DEMO_API_KEY ' + self.value})
         out = json.loads(r.stdout)
-        self.assertEqual(out['notice'], 'Saved as DEMO_API_KEY. Ready for Claude Code, Codex, and their subagents.')
+        self.assertEqual(out['notice'], 'Saved DEMO_API_KEY to keywarden. Ready to use.')
         self.assertNotIn(self.value, r.stdout)
         session = self.run_script('session_hook.py', '--codex', data={'session_id': 'C1'}).stdout
         self.assertIn('ordinary saved keys work automatically', session)

@@ -39,7 +39,7 @@ try:
     run("keys.py", "setup", "local")
     run("keys.py", "approvals", "on")  # This suite exercises the optional approval layer.
     out = say("save this cloudfront key K2JCJMDEHXQW5F")
-    expect("save this saves and continues the message", '"block"' not in out and "Saved as CLOUDFRONT_KEY" in out
+    expect("save this saves and continues the message", '"block"' not in out and "Saved CLOUDFRONT_KEY to keywarden" in out
            and "K2JC" not in out)
     expect("the message explains the local cleanup limit", "best-effort" in out)
     expect("fallback discloses the original paste", "pasted value can reach" in out)

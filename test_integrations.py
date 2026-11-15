@@ -81,6 +81,7 @@ class InstallerTests(unittest.TestCase):
             install.install_plugin()
         self.assertIn(unittest.mock.call("plugin", "marketplace", "update", "keywarden"), cli.call_args_list)
         self.assertIn(unittest.mock.call("plugin", "update", "keywarden@keywarden", "--scope", "user"), cli.call_args_list)
+        self.assertIn(unittest.mock.call("plugin", "enable", "keywarden@keywarden", "--scope", "user"), cli.call_args_list)
 
     def test_default_installs_both(self):
         with patch.object(install, "install_op"), patch.object(install, "install_plugin"), \
@@ -138,8 +139,9 @@ class CodexFlowTests(unittest.TestCase):
     def test_paste_is_saved_and_continues(self):
         out = self.message("key DEMO_API_KEY " + self.value)
         self.assertNotIn("decision", out)
-        self.assertIn("Saved as DEMO_API_KEY", out["systemMessage"])
-        self.assertIn("pasted value can reach the model", out["systemMessage"])
+        self.assertIn("Saved DEMO_API_KEY to keywarden", out["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("original paste may remain", out["systemMessage"])
+        self.assertNotIn("Saved DEMO_API_KEY", out["systemMessage"])
         self.assertNotIn("suppressOriginalPrompt", json.dumps(out))
         self.assertEqual(list(json.loads((self.state / "grants.json").read_text())["callers"]), ["codex:codex"])
         self.assertNotIn(self.value, json.dumps(out))
@@ -149,10 +151,25 @@ class CodexFlowTests(unittest.TestCase):
         self.assertNotIn(self.value, meta)
         self.assertEqual(self.message("use DEMO_API_KEY"), {})
 
+    def test_fallback_privacy_note_is_separate_and_once_per_session(self):
+        from prompt_hook import PRIVACY_NOTE
+        payload = {"session_id": "S1", "prompt": "key DEMO_API_KEY " + self.value}
+        first = json.loads(self.run_script("prompt_hook.py", "--codex", data=payload).stdout)
+        second = json.loads(self.run_script("prompt_hook.py", "--codex", data=payload).stdout)
+        other = json.loads(self.run_script("prompt_hook.py", "--codex", data=dict(payload, session_id="S2")).stdout)
+        self.assertEqual(first["systemMessage"], PRIVACY_NOTE)
+        self.assertNotIn("systemMessage", second)
+        self.assertEqual(other["systemMessage"], PRIVACY_NOTE)
+        self.assertNotIn("Saved", first["systemMessage"])
+        self.assertNotIn("UserPromptSubmit says", first["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("normal reply", first["hookSpecificOutput"]["additionalContext"])
+        self.assertNotIn(self.value, (self.state / "capture-notices.json").read_text())
+
     def test_task_paste_approves_the_session_then_expiry_requires_chat(self):
         before = time.time()
         out = self.message("Build an app using this key.\nkey DEMO_API_KEY " + self.value)
-        self.assertIn("Saved as DEMO_API_KEY. This session can use it for 12 hours.", out["systemMessage"])
+        self.assertIn("Saved DEMO_API_KEY to keywarden. Approved for this session (12 hours).",
+                      out["hookSpecificOutput"]["additionalContext"])
         grants = json.loads((self.state / "grants.json").read_text())["callers"]
         self.assertEqual(list(grants), ["codex:codex"])  # only the chat it was given in
         self.assertGreaterEqual(grants["codex:codex"]["DEMO_API_KEY"], before + 12 * 3600)
@@ -180,7 +197,8 @@ class CodexFlowTests(unittest.TestCase):
             with self.subTest(extra=extra):
                 (self.state / "config.json").write_text(json.dumps({"backend": "1password", "strict": True, **extra}))
                 out = self.message("Build an app with this key.\nkey DEMO_API_KEY " + self.value)
-                self.assertNotIn("can use it", out["systemMessage"])
+                self.assertNotIn("Approved for this session", out["hookSpecificOutput"]["additionalContext"])
+                self.assertIn("Approval needed before use", out["hookSpecificOutput"]["additionalContext"])
                 self.assertFalse((self.state / "grants.json").exists())
                 self.assertIn("Request approval", out["hookSpecificOutput"]["additionalContext"])
 
@@ -189,7 +207,7 @@ class CodexFlowTests(unittest.TestCase):
             with self.subTest(request=request):
                 (self.state / "grants.json").unlink(missing_ok=True)
                 out = self.message(request + ".\nkey DEMO_API_KEY " + self.value)
-                self.assertIn("This session can use it", out["systemMessage"])
+                self.assertIn("Approved for this session", out["hookSpecificOutput"]["additionalContext"])
                 grants = json.loads((self.state / "grants.json").read_text())["callers"]
                 self.assertEqual(list(grants), ["codex:codex"])
                 self.assertNotEqual(self.grant().returncode, 0)  # anyone else still asks
@@ -200,7 +218,7 @@ class CodexFlowTests(unittest.TestCase):
         out = json.loads(result.stdout)
         self.assertEqual(out["text"], "Build an app with this key.\nkey DEMO_API_KEY [DEMO_API_KEY]")
         self.assertEqual(out["approved"], ["DEMO_API_KEY"])
-        self.assertEqual(out["notice"], "Saved as DEMO_API_KEY. This session can use it for 12 hours.")
+        self.assertEqual(out["notice"], "Saved DEMO_API_KEY to keywarden. Approved for this session (12 hours).")
         self.assertNotIn(self.value, result.stdout)
         self.assertEqual(self.grant(self.token()).returncode, 0)
 

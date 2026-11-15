@@ -25,7 +25,7 @@ You: Build an AI chat app with this OpenAI API key: sk-…
 **2. keywarden saves it. The agent keeps working.**
 
 ```text
-Agent: Saved as OPENAI_API_KEY. Ready for Claude Code, Codex, and their subagents.
+Agent: Saved OPENAI_API_KEY to keywarden. Ready to use.
 ```
 
 **3. Reuse it next time, in either agent.** No need to paste the value again or type `approve`. The agent finds the saved name and programs receive the value through environment variables.
@@ -46,6 +46,17 @@ keys setup local
 Restart your agent. In **Codex**, review and trust keywarden in `/hooks`, or **Settings > Hooks** on desktop. If the installer changes your PATH, open a new terminal before setup. On Windows, use `python` if `python3` isn't available.
 
 The installer adds the command, hooks, and skill for both agents, plus Claude's prompt-replacement plugin. Use `--agent claude` or `--agent codex` to install one integration. Existing explicit `chat` or `phone` settings are preserved; run `keys approvals` to see your mode.
+
+<details>
+<summary><strong>Why isn't Claude replacing a pasted key?</strong></summary>
+
+The prompt-replacement plugin must be installed, enabled, and loaded in the running Claude session. Run `python3 install.py --agent claude`, then fully restart Claude Code. Installing only the Python hooks does not load the replacement plugin.
+
+Replacement is a literal string edit in the plugin's JavaScript runtime. For storage, it tries the installed `keys` command, available shells (Bash/Zsh/sh on macOS/Linux; PowerShell or cmd on Windows), then Python launchers. The storage backend still requires Python 3; shell launchers do not replace that dependency. A missing or stale cached Python path no longer stops discovery.
+
+If the plugin cannot save and replace safely, it blocks the message with an actionable error. Without the plugin, the command-hook fallback still saves the key, but the original paste can reach the provider. That path shows a short privacy note once per session. Save confirmations appear in the agent's normal reply, with a toast when the plugin is loaded.
+
+</details>
 
 ## Optional: approvals and session binding
 
@@ -154,6 +165,6 @@ Uninstall with `python3 install.py --uninstall`. Saved keys stay in their store.
 python3 test_all.py
 ```
 
-Tests cover default automatic access, enabling/disabling controls, separate session and subagent approvals, both agents' native hooks, storage, output masking, and transcript cleanup. Native tests use synthetic keys and a local model stub; no real model API is called. Real 1Password authentication, Windows, and approval hardware remain unverified. Phone tests need `cryptography`; shell tests need Bash. `python3 e2e_claude.py` separately tests the enabled control with real Claude sessions using your account.
+Tests cover default automatic access, enabling/disabling controls, separate session and subagent approvals, both agents' native hooks, storage, output masking, and transcript cleanup. Native tests use synthetic keys and a local model stub; no real model API is called. Plugin tests cover literal replacement, Unicode, multiline/repeated values, launcher selection, and safe failure; they use Node.js 22.6+ when available. Shell selection on Windows is mocked; real Windows, 1Password authentication, and approval hardware remain unverified. Phone tests need `cryptography`; shell tests need Bash. `python3 e2e_claude.py` separately tests the enabled control with real Claude sessions using your account.
 
 Hook references: [Codex](https://learn.chatgpt.com/docs/hooks), [Claude Code](https://code.claude.com/docs/en/hooks).

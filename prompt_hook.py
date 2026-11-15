@@ -8,6 +8,7 @@ Only messages submitted by the user handle later approval replies.
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -20,6 +21,7 @@ NOTICES = ("<task-notification", "<system-reminder", "<command-", "<local-comman
 TIME = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\b")
 IS_CODEX = "--codex" in sys.argv[1:]
 AGENT = "Codex" if IS_CODEX else "Claude"
+PRIVACY_NOTE = "The original paste may remain in chat history or with the model provider, even after saving the key."
 
 
 def block(reason):
@@ -78,6 +80,49 @@ def session_caller(data, agent):
     return f"codex:{sid}" if agent == "Codex" else sid
 
 
+def privacy_notice(data, agent):
+    """Show the fallback privacy limitation once per session, separately from successful-save confirmation."""
+    if not data.get("session_id"):
+        return PRIVACY_NOTE
+    import approve
+    path = approve.STATE / "capture-notices.json"
+    now = time.time()
+    who = session_caller(data, agent)
+    try:
+        seen = approve._load(path, {})
+        seen = {k: at for k, at in seen.items() if isinstance(at, (int, float)) and now - at < 30 * 86400}
+        if who in seen:
+            return None
+        seen[who] = now
+        approve._save(path, seen)
+    except Exception:
+        pass  # If the local record fails, display the note rather than silently suppressing it.
+    return PRIVACY_NOTE
+
+
+def replacement_plan(text, found, results):
+    """Return sanitized text and UTF-16 ranges for literal replacement by the JavaScript plugin.
+
+    Ranges contain no secret values. UTF-16 offsets match JavaScript string slicing, including emoji.
+    """
+    matches = []
+    for (_, value, _), (name, _) in zip(found, results):
+        start = 0
+        while (at := text.find(value, start)) != -1:
+            matches.append((at, at + len(value), name))
+            start = at + len(value)
+    selected, end = [], -1
+    for start, stop, name in sorted(set(matches), key=lambda m: (m[0], -m[1])):
+        if start >= end:
+            selected.append((start, stop, name))
+            end = stop
+    edits = [{"start": len(text[:a].encode("utf-16-le")) // 2,
+              "end": len(text[:b].encode("utf-16-le")) // 2, "name": name} for a, b, name in selected]
+    for start, stop, name in reversed(selected):
+        text = text[:start] + f"[{name}]" + text[stop:]
+    return text, edits
+
+
 def capture(data, agent):
     """Save detected values, then derive consent from the user's sanitized request. Never return values."""
     import approve
@@ -87,8 +132,7 @@ def capture(data, agent):
     if not found:
         return {"text": text, "saved": []}
     results = keys.save_found(found, text, data.get("cwd") or "", agent=agent)
-    for (_, value, _), (name, _) in zip(found, results):
-        text = text.replace(value, f"[{name}]")
+    text, edits = replacement_plan(text, found, results)
     if keys.find_keys(text):
         raise ValueError("a detected value remained after replacement")
     names = [name for name, _ in results]
@@ -96,16 +140,18 @@ def capture(data, agent):
     # Giving a session a key is the approval: that session can use it. Protected keys and phone mode still ask.
     approved = approve.grant_from_prompt(names, text, who)
     pending = [name for name in names if name not in approved]
-    notice = ". ".join(f"Saved as {name}" for name in names) + "."
+    notice = f"Saved {', '.join(names)} to keywarden."
     span = approve.span(approve.paste_minutes())
     if approved:
         if approve.settings()[0] == "auto":
-            notice += (" Ready for Claude Code, Codex, and their subagents." if not pending
-                       else f" {', '.join(approved)} ready without approval.")
+            notice += " Ready to use." if not pending else f" Ready to use: {', '.join(approved)}."
         else:
-            notice += (f" This session can use it for {span}." if not pending
-                       else f" This session can use {', '.join(approved)} for {span}.")
-    context = (f"keywarden: {notice} Tell the person this confirmation, then continue their task. "
+            notice += (f" Approved for this session ({span})." if not pending
+                       else f" Approved for this session ({span}): {', '.join(approved)}.")
+    if pending:
+        notice += " Approval needed before use." if not approved else f" Approval still needed: {', '.join(pending)}."
+    context = (f"keywarden: {notice} Confirm this in one short sentence in your normal reply, then continue their task. "
+               "Do not quote hook names or implementation details. "
                f"Use the saved names {', '.join(names)}; never repeat or write the values. "
                'Run keys status, then use "$NAME" in commands. ')
     if pending:
@@ -115,7 +161,7 @@ def capture(data, agent):
         scrub_later(data.get("transcript_path"), [v for _, v, _ in found])
     except Exception:
         pass
-    return {"text": text, "saved": [list(r) for r in results], "approved": approved,
+    return {"text": text, "edits": edits, "saved": [list(r) for r in results], "approved": approved,
             "notice": notice, "context": context}
 
 
@@ -150,7 +196,9 @@ def main():
             block("keywarden couldn't finish saving or approving the key. Your message wasn't sent. Check keys setup.")
         disclosure = (f" {AGENT}'s prompt hook cannot replace your original message; the pasted value can reach "
                       "the model and local history. Local redaction is best-effort.")
-        tell_agent(out["context"] + disclosure, out["notice"] + disclosure)
+        context = (out["context"] + disclosure + " Any privacy note is handled separately by the app. "
+                   "Do not repeat that note or the hook explanation in your reply.")
+        tell_agent(context, privacy_notice(data, AGENT))
     try:
         import approve
         # The word approve (or no) answers a request from up to 12 hours ago. A loose yes or ok only
