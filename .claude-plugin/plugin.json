@@ -1,5 +1,5 @@
 {
   "name": "keywarden",
-  "version": "0.3.0",
-  "description": "Saves keys supplied with a task, replaces their values with names, and approves first use for one hour."
+  "version": "0.4.0",
+  "description": "One key store for Claude Code and Codex. Keys work automatically, with optional approvals for each session and subagent."
 }

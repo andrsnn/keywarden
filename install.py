@@ -92,7 +92,7 @@ def install_plugin():
     installed = claude("plugin", "install", "keywarden@keywarden", "--scope", "user")
     updated = claude("plugin", "update", "keywarden@keywarden", "--scope", "user")
     if installed or updated:
-        say("Claude plugin: ready (pasted keys are replaced with names; a key given with a task works in that session only)")
+        say("Claude plugin: ready (pasted keys are replaced with names; approval controls are optional)")
     else:
         say("Claude plugin: not installed. Run  claude plugin marketplace add " + str(REPO) +
             "  and then  claude plugin install keywarden@keywarden")
@@ -143,7 +143,8 @@ def install(agent="both"):
         install_codex()
 
     print("\nNext: run  keys setup  to keep keys on this computer, or  keys setup 1password  to use 1Password.")
-    print("Then run  keys phone  to approve key use from your phone.")
+    print("Optional: keys approvals on enables separate approval for each agent session and subagent.")
+    print("Optional: keys phone sets up phone approval.")
 
 
 def install_claude():
@@ -178,7 +179,8 @@ def install_codex():
     write_settings(d, CODEX_HOOKS)
     say(f"Codex hooks: added to {CODEX_HOOKS}")
     say("Codex: restart, then review and trust keywarden in /hooks (desktop: Settings > Hooks).")
-    say("Codex: a key given with a task is saved and works in that session only; the task continues.")
+    say("Codex: saved keys work automatically by default, including in subagents.")
+    say("Optional: keys approvals on enables separate approval for every session and subagent.")
     say("Codex: the original paste can reach the model/history. Local redaction is best-effort.")
 
 

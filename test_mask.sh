@@ -14,7 +14,7 @@ trap cleanup EXIT
 PYTHON=python
 command -v "$PYTHON" >/dev/null 2>&1 || PYTHON=python3
 wrapped() {  # the hook's wrapper for a command, without the line that loads the real keys
-  printf '%s' "$1" | "$PYTHON" -c "import sys; sys.path.insert(0, r'$HERE'); import hook; print(hook.wrap('Bash', sys.stdin.read()).split('; ', 1)[1])"
+  printf '%s' "$1" | "$PYTHON" -c "import sys; sys.path.insert(0, r'$HERE'); import hook; print(hook.wrap('Bash', sys.stdin.read(), 'test-caller').split('; ', 2)[2])"
 }
 CMD='cd /; pwd; printf "Authorization: Bearer %s\n" "$FAKE_SECRET"; printf "basic %s\n" "$(printf %s "$FAKE_SECRET" | base64)"; echo stderr-line >&2; (exit 3)'
 W="$(wrapped "$CMD")"

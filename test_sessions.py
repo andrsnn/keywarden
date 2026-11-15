@@ -60,6 +60,7 @@ def expect(name, cond):
 
 try:
     run("keys.py", "setup", "local")
+    run("keys.py", "approvals", "on")  # Session and subagent isolation is an explicit opt-in.
     s1, s1_sub, s2 = token("S1"), token("S1", "A1"), token("S2")
     expect("a session keeps one token", token("S1") == s1)
     expect("a subagent gets its own token", s1_sub != s1)

@@ -37,6 +37,7 @@ def expect(name, cond):
 
 try:
     run("keys.py", "setup", "local")
+    run("keys.py", "approvals", "on")  # This suite exercises the optional approval layer.
     out = say("save this cloudfront key K2JCJMDEHXQW5F")
     expect("save this saves and continues the message", '"block"' not in out and "Saved as CLOUDFRONT_KEY" in out
            and "K2JC" not in out)

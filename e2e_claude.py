@@ -37,6 +37,7 @@ def clear_store():
 
 clear_store()
 subprocess.run([sys.executable, str(HERE / "keys.py"), "setup", "local"], env=env, capture_output=True)
+subprocess.run([sys.executable, str(HERE / "keys.py"), "approvals", "on"], env=env, capture_output=True)
 
 
 def check(name, ok):

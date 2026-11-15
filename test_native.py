@@ -80,7 +80,7 @@ class ModelStub(http.server.BaseHTTPRequestHandler):
             self.wfile.flush()
 
 
-def main():
+def main(mode):
     claude = shutil.which('claude')
     codex = os.environ.get('KEYWARDEN_CODEX_CLI') or shutil.which('codex')
     if not codex and BUNDLED_CODEX.exists():
@@ -90,6 +90,13 @@ def main():
         return
     case = CodexFlowTests()
     case.setUp()
+    config = case.state / 'config.json'
+    cfg = json.loads(config.read_text())
+    if mode == 'auto':
+        cfg.pop('approvals')  # Exercise the actual default, not only an explicit off setting.
+    else:
+        cfg['approvals'] = mode
+    config.write_text(json.dumps(cfg))
     case.value = 'sk-proj-' + secrets.token_urlsafe(40)
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), ModelStub)
     server.requests = []
@@ -113,8 +120,11 @@ def main():
             assert db['vaults']['Agent Keys']['OPENAI_API_KEY'] == case.value
             grants = json.loads((case.state / 'grants.json').read_text())['callers']
             assert len(grants) == 1  # only the session the key was given in
-            assert 12 * 3600 - 100 < list(grants.values())[0]['OPENAI_API_KEY'] - time.time() <= 12 * 3600
-            assert any(b'Saved as OPENAI_API_KEY. This session can use it for 12 hours.' in body
+            duration = 12 * 3600 if mode == 'chat' else 3600
+            assert duration - 100 < list(grants.values())[0]['OPENAI_API_KEY'] - time.time() <= duration
+            notice = (b'Saved as OPENAI_API_KEY. This session can use it for 12 hours.' if mode == 'chat' else
+                      b'Saved as OPENAI_API_KEY. Ready for Claude Code, Codex, and their subagents.')
+            assert any(notice in body
                        for body in server.requests)
         if claude:
             plugin = case.root / 'plugin'
@@ -132,7 +142,7 @@ def main():
             assert not any(case.value.encode() in body for body in server.requests), 'Value reached model stub'
             assert any(b'[OPENAI_API_KEY]' in body for body in server.requests), 'No saved-name reference'
             check_saved_and_granted()
-            print('PASS native Claude plugin: saves, approves 1 hour, forwards only the saved name', flush=True)
+            print(f'PASS native Claude plugin ({mode}): saves, forwards only the name, uses the selected access mode', flush=True)
             reset_capture()
             result = subprocess.run([*base, prompt], env=env, cwd=case.root, input='',
                                     capture_output=True, text=True, timeout=30)
@@ -142,7 +152,7 @@ def main():
             assert any(b'pasted value can reach' in body for body in server.requests), 'Missing exposure disclosure'
             check_saved_and_granted()
             assert case.value not in result.stdout + result.stderr
-            print('PASS native Claude fallback: saves, approves, continues, and discloses original-prompt exposure', flush=True)
+            print(f'PASS native Claude fallback ({mode}): saves, continues, and discloses original-prompt exposure', flush=True)
         else:
             print('SKIP native Claude tests: CLI not installed', flush=True)
         if codex:
@@ -170,7 +180,7 @@ def main():
             assert any(b'pasted value can reach' in body for body in server.requests), 'Missing exposure disclosure'
             check_saved_and_granted()
             assert case.value not in result.stdout + result.stderr
-            print('PASS native Codex: saves, approves 1 hour, continues, and discloses original-prompt exposure', flush=True)
+            print(f'PASS native Codex ({mode}): saves, continues with the selected access mode, and discloses exposure', flush=True)
         else:
             print('SKIP native Codex test: CLI not installed', flush=True)
     finally:
@@ -180,4 +190,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    for mode in ('auto', 'chat'):
+        main(mode)

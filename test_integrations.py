@@ -103,11 +103,11 @@ class CodexFlowTests(unittest.TestCase):
         self.state.mkdir()
         (self.root / "fakeop.py").write_text(FAKE_OP)
         (self.root / "op.json").write_text(json.dumps({"vaults": {"Agent Keys": {}}}))
-        (self.state / "config.json").write_text(json.dumps({"backend": "1password", "strict": True}))
+        (self.state / "config.json").write_text(json.dumps({"backend": "1password", "strict": True,
+                                                          "approvals": "chat", "unlock_1password": False}))
         self.env = dict(os.environ, AGENT_KEYS_STATE=str(self.state), AGENT_KEYS_NS="keywarden-integration-test",
                         AGENT_KEYS_BACKEND="1password", AGENT_KEYS_OP=f'"{sys.executable}" "{self.root / "fakeop.py"}"',
-                        FAKE_OP_DB=str(self.root / "op.json"),
-                        FAKE_OP_UNLOCK="no-app")  # no 1Password app here, so approvals happen in the chat
+                        FAKE_OP_DB=str(self.root / "op.json"))  # Fake reads succeed; approval tests use chat.
         self.value = "demo_" + "Aq9vJ2xB7p" * 4
 
     def run_script(self, script, *args, data=None, stdin=None, token=None):
@@ -230,7 +230,9 @@ class CodexFlowTests(unittest.TestCase):
         for agent_args in ([], ["--codex"]):
             result = self.run_script("hook.py", *agent_args,
                                      data={"tool_name": "Bash", "tool_input": {"command": command}})
-            self.assertEqual(result.stdout, "")  # Neither agent receives injection after the shared lock.
+            if result.stdout:
+                command = json.loads(result.stdout)["hookSpecificOutput"]["updatedInput"]["command"]
+                self.assertNotIn(" env)", command)  # Caller tagging alone does not load any keys.
 
     def test_claude_explicit_save_rewrite_passes_fallback(self):
         result = self.run_script("prompt_hook.py", "--rewrite", data={"prompt": "key DEMO_API_KEY " + self.value})

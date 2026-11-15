@@ -6,7 +6,7 @@
   keys setup local                  use this computer's key store (Windows Credential Manager or the Mac Keychain)
   keys switch 1password|local       move to the other store, copying every key across
   keys strict on|off                1Password only, read fresh each time behind its own check
-  keys approvals chat|phone|off     how a key gets a grant: you reply approve (default), a phone tap, or no question
+  keys approvals on|off|phone       optional session/subagent approvals (off by default); chat or phone
   keys protect NAME                 this key always needs a tap (keys unprotect NAME to undo)
   keys phone                        approve key use from your phone (then: keys phone test)
   keys add NAME [--clipboard | --from-env VAR] [--note "what it is"]
@@ -425,25 +425,31 @@ def _left(expiry):
 
 
 def cmd_approvals(args):
-    """keys approvals chat|phone|off: how a key without a grant gets one. chat is the default."""
+    """keys approvals on|off|phone: optional per-session and subagent access control. Off by default."""
     cfg = load_json(CONFIG, {})
-    words = {"chat": "chat: Claude asks you in the chat and you reply approve",
+    words = {"chat": "on: each session and subagent asks in chat before using saved keys",
              "phone": "phone: every key needs a tap on your phone",
-             "auto": "off: keys are granted with no question"}
+             "auto": "off: saved keys are available automatically to agents and subagents"}
     mode = approve.settings()[0]
     if not args:
         print(f"Approvals are {words[mode]}.")
         if cfg.get("protected") and mode != "phone":
             print("These keys need a tap on your phone: " + ", ".join(sorted(cfg["protected"])))
         return
-    want = {"chat": "chat", "phone": "phone", "on": "phone", "off": "auto"}.get(args[0])
+    want = {"chat": "chat", "phone": "phone", "on": "chat", "off": "auto"}.get(args[0])
     if not want:
-        die("usage: keys approvals chat|phone|off")
+        die("usage: keys approvals on|off|phone (chat is an alias for on)")
     order = {"auto": 0, "chat": 1, "phone": 2}
     if order[want] < order[mode]:  # asking less needs the person's OK
         if not approve.ask(["APPROVALS_CHANGE"], f"change approvals to {args[0]}", minutes=1, force=True):
             die("not approved, so approvals stay as they are.")
         approve.lock(["APPROVALS_CHANGE"])
+    if want != mode:
+        # Switching on must not inherit automatic access created while controls were off.
+        approve.lock(who="all")
+        approve.PENDING.unlink(missing_ok=True)
+        if store_now().kind == "1password":
+            stores.cache_clear()
     cfg["approvals"] = want
     save_json(CONFIG, cfg)
     print(f"Approvals are {words[want]}.")
@@ -512,8 +518,20 @@ def cmd_strict(args):
 def cmd_status(args):
     approved, names = approve.grants(), sorted(existing_names())
     who = approve.caller()
+    mode, protected, _ = approve.settings()
     if stores.strict():
         print("Strict mode is on: keys are read fresh from 1Password, which asks before each new program reads.")
+    if mode == "auto":
+        print("Approval and session binding are off. Agents and subagents can use ordinary saved keys automatically.")
+        ordinary = sorted(set(names) - protected)
+        if ordinary:
+            print("Available without approval: " + ", ".join(ordinary))
+        if protected:
+            print("Protected keys still require approval: " + ", ".join(sorted(protected)))
+        approved = {n: expiry for n, expiry in approved.items() if n in protected}
+        names = sorted(set(names) & protected)
+        if not names:
+            return
     if approved:
         print("Approved for this session. Its commands have these as environment variables:")
         for n in sorted(approved):
@@ -521,28 +539,29 @@ def cmd_status(args):
     else:
         print("No keys are approved for this session." if who != approve.TERMINAL else "No keys are approved here.")
     others = approve.callers_holding()
-    if others:
+    if others and mode != "auto":
         print(f"{others} other session{'s' if others != 1 else ''} or subagent{'s' if others != 1 else ''} "
               "hold their own approvals. Each one asks for its own.")
     rest = [n for n in names if n not in approved]
     if rest:
         print("Not approved: " + ", ".join(rest))
         print('To use one, run: keys grant NAME --for "what you\'re doing"')
-    on, protected, _ = approve.settings()
-    if not on and protected:
+    if protected:
         print("These need a tap on the phone: " + ", ".join(sorted(protected)))
 
 
 def cmd_env(args):
     """Print shell lines that set every key, only while an approval lasts. The Claude hook runs this before
     each command and evals the output, so values reach the command and never the chat."""
+    s = store_now()
+    if approve.settings()[0] == "auto":
+        approve.allow_automatic(call(s.names))
     approved = approve.grants()
     if not approved:
         if stores.cache_names() and not approve.all_granted():
             stores.cache_clear()  # every approval ran out: delete the 1Password copies
         return
     ps = "--ps" in args
-    s = store_now()
     fresh = s.kind == "local" or stores.strict()  # read straight from the store, not from copies
     try:
         if fresh:
@@ -585,7 +604,11 @@ def cmd_lock(args):
         else:
             stores.cache_clear()
     scope = "every session" if who == approve.TERMINAL else "this session"
-    print(f"Done. {', '.join(names) if names else 'Every key'} will ask for approval again in {scope}.")
+    if approve.settings()[0] == "auto":
+        print(f"Cleared grants in {scope}. Approvals are off, so ordinary keys remain available automatically. "
+              "Run keys approvals on to require approval.")
+    else:
+        print(f"Done. {', '.join(names) if names else 'Every key'} will ask for approval again in {scope}.")
 
 
 def cmd_rename(args):

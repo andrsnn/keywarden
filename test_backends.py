@@ -82,7 +82,7 @@ def main():
         keys("add", "K_ONE", stdin="value-one-1234567890abc")
         expect("save to the computer's store", "K_ONE" in keys("list")[1])
 
-        keys("approvals", "on")  # every key needs a tap from here on in this test
+        keys("approvals", "phone")  # every key needs a tap from here on in this test
         code, out = keys("switch", "1password")
         expect("switch needs approval", code != 0 and "not approved" in out)
         approve_now(["K_ONE"])

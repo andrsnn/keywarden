@@ -2,7 +2,8 @@
 
 Both ask at the same time. The first answer wins. A "yes" covers those keys for a few minutes (a grant).
 
-A grant belongs to one caller: the agent session that asked for it (a subagent is its own caller). The hook
+Approvals are off by default: ordinary saved keys are made available automatically to every caller.
+When approvals are on, a grant belongs to one caller (a subagent is its own caller). The hook
 gives every command a caller token in AGENT_KEYS_CALLER, and keys.py looks the token up here, so a key one
 session was given doesn't reach another session, a subagent or Codex until the person approves it there too.
 A command with no token (a person at a terminal) is the caller "terminal".
@@ -275,12 +276,31 @@ def span(minutes):
 
 def settings():
     """(mode, protected keys, minutes a grant lasts). mode is how a key without a grant gets one:
-    "chat" (the default): Claude asks you in the chat and you reply approve.
+    "chat": the agent asks you in the chat and you reply approve.
     "phone": every key needs a tap on your phone (keys approvals phone).
-    "auto": granted at once with no question (keys approvals off)."""
+    "auto" (the default): granted at once with no question (keys approvals off)."""
     cfg = _load(STATE / "config.json", {})
-    mode = {True: "phone", "phone": "phone", "auto": "auto"}.get(cfg.get("approvals"), "chat")
+    mode = {True: "phone", False: "auto", "phone": "phone", "auto": "auto", "off": "auto",
+            "chat": "chat"}.get(cfg.get("approvals", "auto"), "chat")
     return mode, set(cfg.get("protected", [])), cfg.get("auto_minutes", 60)
+
+
+def allow_automatic(names, who=None):
+    """With approval controls off, make ordinary keys usable without a user prompt.
+
+    Caller records still support audit and explicitly protected keys. They impose no session boundary on
+    ordinary keys in this mode: every caller, including subagents, receives access automatically.
+    """
+    mode, protected, minutes = settings()
+    if mode != "auto":
+        return []
+    who = caller() if who is None else who
+    allowed = sorted(set(names) - protected)
+    need = granted(allowed, who)
+    if need:
+        _set(need, time.time() + minutes * 60, who)
+        log_use(need, "automatic key access", f"allowed (approvals off) ({who})")
+    return allowed
 
 
 def needs_tap(names):
@@ -362,6 +382,8 @@ def grant_from_prompt(names, what, who=TERMINAL):
     Called by prompt capture only. `what` is the message with every value replaced by its name.
     """
     mode, protected, _ = settings()
+    if mode == "auto":
+        return allow_automatic(names, who)
     allowed = sorted(set(names) - protected) if mode != "phone" else []
     if not allowed:
         return []

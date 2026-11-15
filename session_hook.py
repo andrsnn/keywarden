@@ -26,8 +26,10 @@ def main():
     listed = [n + (f" ({meta[n].get('note') or meta[n].get('kind')})"
                    if n in meta and (meta[n].get("note") or meta[n].get("kind")) else "") for n in names]
     text = (f"keywarden has these keys saved: {', '.join(listed)}. When a task needs a key, use one of these "
-            "before saying you don't have it: run keys grant NAME --for \"why\", then use \"$NAME\" in commands. "
-            "Approvals belong to one session: a subagent you start asks for its own. "
+            "before saying you don't have it: run keys grant NAME --for \"why\", then use \"$NAME\" in commands. " +
+            ("Approval controls are off: ordinary saved keys work automatically for agents and subagents. "
+             if approve.settings()[0] == "auto" else
+             "Approvals belong to one session: a subagent you start asks for its own. ") +
             "Load the keywarden skill for the details.")
     if granted:
         text += f" Granted now: {', '.join(granted)}."

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Save keys supplied in user prompts and approve task use for one hour.
+"""Save keys supplied in user prompts, with automatic access or optional caller-bound approvals.
 
 Claude's plugin replaces detected values before forwarding. Command hooks let the task continue, attach
 saved-name guidance, and attempt local transcript cleanup; the original prompt can still reach the model.
@@ -99,8 +99,12 @@ def capture(data, agent):
     notice = ". ".join(f"Saved as {name}" for name in names) + "."
     span = approve.span(approve.paste_minutes())
     if approved:
-        notice += (f" This session can use it for {span}." if not pending
-                   else f" This session can use {', '.join(approved)} for {span}.")
+        if approve.settings()[0] == "auto":
+            notice += (" Ready for Claude Code, Codex, and their subagents." if not pending
+                       else f" {', '.join(approved)} ready without approval.")
+        else:
+            notice += (f" This session can use it for {span}." if not pending
+                       else f" This session can use {', '.join(approved)} for {span}.")
     context = (f"keywarden: {notice} Tell the person this confirmation, then continue their task. "
                f"Use the saved names {', '.join(names)}; never repeat or write the values. "
                'Run keys status, then use "$NAME" in commands. ')

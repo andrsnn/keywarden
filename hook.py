@@ -166,6 +166,9 @@ def main():
             import approve
             who = caller_of(data, codex)
             token = approve.token_for(who)
+            if approve.settings()[0] == "auto":
+                import keys
+                approve.allow_automatic(keys.existing_names(), who)
             has_keys = approve.active(who)
         except Exception:
             sys.exit(0)

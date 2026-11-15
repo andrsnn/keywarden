@@ -16,7 +16,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="keywarden-tests-") as tmp:
         env = dict(os.environ, AGENT_KEYS_STATE=tmp, AGENT_KEYS_NS="keywarden-suite-test")
         suites = [[sys.executable, str(HERE / name)] for name in (
-            "test_hook.py", "test_prompt.py", "test_chat.py", "test_sessions.py", "test_backends.py", "test_phone.py",
+            "test_hook.py", "test_prompt.py", "test_defaults.py", "test_chat.py", "test_sessions.py", "test_backends.py", "test_phone.py",
             "test_integrations.py", "test_scrub.py", "test_native.py")]
         if shutil.which("bash"):
             suites.append(["bash", str(HERE / "test_mask.sh")])
