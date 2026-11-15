@@ -7,6 +7,7 @@ For **Claude Code** and **local Codex**.
 ## Features
 
 - 🔁 **One store, both agents.** Save a key with Claude, use it from Codex—or the other way around. No copying keys between tools.
+- 🧷 **Session-bound approvals.** Each Claude or Codex session, and each subagent, needs its own approval to use a saved key.
 - 💬 **Stay in the conversation.** Give your agent a task and a key; keywarden saves it while you keep building.
 - ⏳ **Giving a key is the approval.** The session you give a key to can use it for 12 hours. Any other session, subagent or Codex asks you first.
 - 🔐 **Encrypted storage.** Keys live in your OS key store, with optional 1Password support.
@@ -43,9 +44,9 @@ You: approve 30m
 
 No need to find or paste the value again. `approve` alone grants one hour by default.
 
-**Each approval belongs to one session.** A grant goes to the session that asked for it. A subagent that session starts is a separate caller, and so is every other Claude or Codex session, so each one asks before it gets the key. keywarden tells them apart with the session and subagent ids Claude Code and Codex give their hooks. The hook puts a token for that caller in each command, and a command that tries to set or clear the token is blocked. `keys lock` in a session ends that session's approvals. `keys lock` in your own terminal ends everyone's.
+**Each approval belongs to one session.** A grant goes to the session that asked for it. Other sessions and subagents ask separately. `keys lock` in a session ends that session's approvals. `keys lock` in your own terminal ends everyone's.
 
-**Switch agents freely.** Claude and Codex discover the same saved names, use the same selected backend, and share approvals. You can start a task in Claude and continue in Codex without storing the key again. Locking a key ends access for both.
+**Switch agents freely.** Claude and Codex discover the same saved names and use the same selected backend. You can start a task in Claude and continue in Codex without storing the key again; Codex requests its own approval before use. The store is shared, while approvals stay separate.
 
 ## Install once
 
@@ -75,6 +76,12 @@ The installer adds the command, hooks, and skill for both agents, plus Claude's 
 **Pasting still has limits.** Claude's plugin replaces detected values before forwarding to the model. Codex and Claude without the plugin continue with the original prompt, so the initial paste can reach the model and local history. Redaction is best-effort: it cannot erase in-memory context, provider copies, backups, or every local log. Detection is not exhaustive, and these hooks cannot stop a determined program running as you.
 
 To keep the value out of chat entirely, copy it and run `keys add NAME --clipboard` in your terminal. That saves it and clears the clipboard; the agent requests approval when it needs the saved key.
+
+### Session-bound access
+
+keywarden uses the session and subagent IDs supplied by Claude Code and Codex to identify each caller. The hook puts a caller token in each command, and keywarden checks that caller's grants before loading keys. Common attempts to set or clear the token are blocked.
+
+**This binds approval to an agent session, not an OS process ID.** Approved values are passed into program environments, where child processes can inherit them. Expiry and `keys lock` stop future key loading; they cannot remove a value already received by a running program.
 
 ## Optional layers
 
