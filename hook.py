@@ -2,9 +2,8 @@
 """Claude Code PreToolUse hook from keywarden.
 
 1. It stops tool calls that would print a key into the chat, like printenv or cat .env.
-2. It puts the caller's token in each Bash or PowerShell command (AGENT_KEYS_CALLER). The caller is the session,
-   plus the subagent when a subagent runs the command. keys.py uses the token to know who is asking, so a grant
-   reaches only the session or subagent it was given to.
+2. It puts the thread's token in each Bash or PowerShell command (AGENT_KEYS_CALLER). Subagents use their
+   parent thread's token and subprocesses inherit it. Other threads have separate grants.
 3. While that caller has keys approved, it adds a line to the start of the command that loads them as environment
    variables, so the agent can use "$NAME" with any tool without seeing the value.
 
@@ -189,10 +188,9 @@ KEYS_CMD = re.compile(r"\bkeys(?:\.py)?\b")
 
 
 def caller_of(data, codex=False):
-    """Who runs this command: the session, plus the subagent or teammate when one runs it."""
-    sid = data.get("session_id") or ("codex" if codex else "claude")
-    agent = data.get("agent_id")
-    return f"{'codex:' if codex else ''}{sid}" + (f"/{agent}" if agent else "")
+    """The parent thread owns the approval, including when a subagent runs this command."""
+    import approve
+    return approve.session_caller(data, codex)
 
 
 def tag(tool, cmd, token):

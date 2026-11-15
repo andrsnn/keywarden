@@ -82,7 +82,8 @@ check("the key was saved", "WEATHER_API_KEY" in subprocess.run(
     [sys.executable, str(HERE / "keys.py"), "list"], env=env, capture_output=True, text=True).stdout)
 check("only session A holds a grant", list(g) == [sid_a] and "WEATHER_API_KEY" in g.get(sid_a, {}))
 check("session A's command got the key (LENGTH=33)", "LENGTH=33" in text_a.replace(" ", ""))
-check("the subagent had to ask", "needs your OK" in text_a or "Reply approve" in text_a)
+check("the subagent shares its parent approval", "needs your OK" not in text_a and "Reply approve" not in text_a
+      and "approved" in text_a.lower())
 check("the value never reached the model's answer", VALUE not in json.dumps(a))
 
 # Session B: a new session asks for the same key.
@@ -103,7 +104,7 @@ print("session B after approve:", text_b2[-300:])
 g = grants()
 check("approve gave session B the key", "WEATHER_API_KEY" in g.get(sid_b, {}))
 check("session B's command got the key (LENGTH=33)", "LENGTH=33" in text_b2.replace(" ", ""))
-check("the subagent still has no grant", all(c in (sid_a, sid_b) for c in g))
+check("subagents need no separate grant record", all(c in (sid_a, sid_b) for c in g))
 
 clear_store()
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} end-to-end checks passed")

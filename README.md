@@ -1,36 +1,54 @@
 # keywarden
 
-Coding agents can scatter API keys across project files and chat history. **keywarden keeps keys in one encrypted store and lets Claude Code and Codex use them by name.**
+Coding agents can scatter API keys across files and chat history—or reach for saved credentials you never intended a long-running task to use. **keywarden stores keys once and lets you approve specific keys for a Claude Code or Codex thread.**
 
-Saved keys work automatically by default. Optional approval controls give you separate access for each session and subagent.
+**Approvals are on by default.** One approval covers the thread, its subagents, and subprocesses for a limited time. Other threads ask separately.
 
 ## Features
 
-- 🔁 **One store, both agents.** Save a key with Claude, use it from Codex—or the other way around.
-- 💬 **Keep building.** Give your agent a task and a key. It saves the key and gets on with the work.
-- 🧷 **Optional approval and session binding.** Off by default. Turn it on for separate approval of every agent session and subagent.
+- 🔁 **One store, both agents.** Save a key with Claude, use it from Codex—or the other way around. Each thread gets its own approval.
+- 🌙 **Set boundaries before an overnight run.** Tell Nightshift which keys the task needs and how long it may use them. Other saved keys stay unavailable until approved.
+- 🧵 **Approve once for the whole thread.** Subagents and subprocesses share the approved keys and expiry.
+- ⏳ **Access expires.** Long context, compaction, and resuming a thread do not renew an expired approval.
 - 🔐 **Encrypted storage.** macOS Keychain or Windows Credential Manager, with optional 1Password support.
 - 🧹 **Fewer plaintext copies.** Saved-name references, output filtering, and best-effort local transcript cleanup.
 
-<p align="center"><img src="docs/how-it-works.svg" alt="Give your agent a key, keep building without approval prompts, and optionally enable access control for each session and subagent." width="910"></p>
+<p align="center"><img src="docs/how-it-works.svg" alt="Save keys once, approve named keys for a thread, and let its subagents and subprocesses work within the same expiry." width="910"></p>
 
-## The default workflow
+## The developer workflow
 
-**1. You're building something. Give your agent the task and key.**
+**1. Save a key once.** Give your agent a task and a new key:
 
 ```text
 You: Build an AI chat app with this OpenAI API key: sk-…
+
+Agent: Saved OPENAI_API_KEY to keywarden. Approved for this thread (12 hours).
 ```
 
-**2. keywarden saves it. The agent keeps working.**
+Giving a thread a new key is consent to use it, including in its subagents and subprocesses. No second `approve` is needed. To keep the value out of chat entirely, copy it and run `keys add OPENAI_API_KEY --clipboard` in your terminal instead.
+
+**2. Approve saved keys up front for a long run.** Start a new Claude or Codex thread with an explicit line naming the keys and duration:
 
 ```text
-Agent: Saved OPENAI_API_KEY to keywarden. Ready to use.
+You: You'll need these keys: OPENAI_API_KEY, GITHUB_TOKEN for 8h
+     Build the integration and keep working with Nightshift overnight.
+
+Agent: Approved OPENAI_API_KEY and GITHUB_TOKEN for this thread for 8 hours,
+       including its subagents and subprocesses.
 ```
 
-**3. Reuse it next time, in either agent.** No need to paste the value again or type `approve`. The agent finds the saved name and programs receive the value through environment variables.
+`approve OPENAI_API_KEY GITHUB_TOKEN for 8h` also works. Put the approval on its own line and use saved names. Without a duration, named approval lasts **one hour**. Repeating a named approval with a different duration sets its new expiry.
 
-With approval controls off, ordinary saved keys are available automatically to all local agent sessions and subagents using this store. Access is not scoped to a project. Explicitly protected keys retain their extra approval check.
+**3. The agent works within that access.** Programs receive approved values through environment variables. A newly spawned helper shares the thread's approval. Another Claude/Codex thread—or a task needing a different saved key—must ask:
+
+```text
+Agent: Use STRIPE_SECRET_KEY for this task?
+       Reply approve, approve 30m, approve 2h, or no.
+
+You: approve 30m
+```
+
+**This helps with long context threads:** remembering that a key exists does not authorize its use. After compaction or resume, keywarden checks the current approval and expiry again. If an overnight task drifts into work needing another credential, it has to get your permission. This limits key access; it does not approve individual API calls or control how an approved key is used.
 
 ## Install once
 
@@ -45,7 +63,7 @@ keys setup local
 
 Restart your agent. In **Codex**, review and trust keywarden in `/hooks`, or **Settings > Hooks** on desktop. If the installer changes your PATH, open a new terminal before setup. On Windows, use `python` if `python3` isn't available.
 
-The installer adds the command, hooks, and skill for both agents, plus Claude's prompt-replacement plugin. Use `--agent claude` or `--agent codex` to install one integration. Existing explicit `chat` or `phone` settings are preserved; run `keys approvals` to see your mode.
+The installer adds the command, hooks, and skill for both agents, plus Claude's prompt-replacement plugin. Use `--agent claude` or `--agent codex` to install one integration. **Existing explicit approval settings are preserved.** If you previously turned approvals off, run `keys approvals on` to enable them. This also clears grants created while approvals were off. Upgrades with no explicit setting adopt the new approval-on default and clear old automatic grants.
 
 <details>
 <summary><strong>Why isn't Claude replacing a pasted key?</strong></summary>
@@ -58,85 +76,47 @@ If the plugin cannot save and replace safely, it blocks the message with an acti
 
 </details>
 
-## Optional: approvals and session binding
+## How the security layer works
 
-Want more control? Turn on approval for each agent session **and each subagent**:
-
-```sh
-keys approvals on
-```
-
-`keys approvals chat` is an alias. Enabling the control clears grants created in automatic mode, so the new boundary takes effect immediately.
-
-| Access | Off — default | On |
-| --- | --- | --- |
-| Use an ordinary saved key | Automatic. | Requires that caller's approval. |
-| Open another Claude or Codex session | Works automatically. | New session asks for its own access. |
-| Start a subagent | Works automatically. | Subagent asks separately, even if its parent is approved. |
-| Give a session a key | Saved and available to other callers. | Saved; that session gets access for 12 hours by default. Other callers ask. |
-
-With the control on, a caller that needs access asks:
-
-```text
-Agent: Use OPENAI_API_KEY for this task?
-       Reply approve, approve 30m, approve 2h, or no.
-
-You: approve 30m
-```
-
-`approve` alone grants one hour. Giving a session a key directly grants that session 12 hours (`paste_minutes` in config.json); explicitly protected keys and phone-required mode still require their extra check.
-
-To turn the control off again:
-
-```sh
-keys approvals off
-```
-
-Disabling an enabled control requires confirmation. `keys lock` clears grants: with controls on, an agent clears its own grants and your terminal clears everyone's. **With controls off, ordinary keys become available again automatically; `keys lock` does not revoke that automatic access.**
-
-### How the optional security layer works
-
-**The store is shared; approvals belong to individual callers.** A caller is an agent session or one of its subagents.
+**Storage is shared. Approval is scoped to a thread and specific key names.** Claude and Codex see the same saved names, but approval in one thread does not approve another.
 
 ```mermaid
 flowchart LR
-    A[Agent command] --> B{Approval controls on?}
-    B -->|No| C[Load ordinary saved keys]
-    B -->|Yes| D{This caller approved?}
-    D -->|Yes| C
-    D -->|No| E[Ask user; withhold key]
-    C --> F[Filter matching values from output]
+    A[Claude or Codex thread] --> B{Named key approved and unexpired?}
+    B -->|Yes| C[Load approved values into command environment]
+    B -->|No| D[Ask user; withhold key]
+    C --> E[Thread + subagents + subprocesses]
+    E --> F[Filter matching values from hooked output]
 ```
 
-When controls are on:
+1. **Identify the thread.** Hooks use the parent session ID supplied by Claude Code or Codex. Main-agent and subagent commands get the same caller token; subprocesses inherit it and the environment.
+2. **Check names and expiry.** keywarden reads current grants from disk. An old message in a long context, a remembered key name, or compaction does not create or renew access.
+3. **Load approved values.** Hooked commands receive the approved keys. Unapproved keys remain in the store. Delegation shares the approved set and its expiry; it does not expand that set or extend the timer.
+4. **Expire or lock.** Expiry stops future loading. `keys lock` from the thread or a subagent clears that whole thread's grants; your terminal can clear everyone's. Common attempts to change or clear the caller token are blocked.
 
-1. **Identify the caller.** Hooks use the session and subagent IDs supplied by Claude Code and Codex. A caller token identifies commands from that session or subagent.
-2. **Check its grant.** keywarden checks the key name and expiry against that caller's grants. Approval of Claude session A does not approve its subagent, Claude session B, or a Codex session.
-3. **Load approved values.** Approved keys enter the program's environment. Unapproved values are withheld until the user approves. A subagent's request can be answered in its parent session's chat; an unrelated session's reply does not approve it.
-4. **Expire or lock.** Expiry and `keys lock` stop future loading under that grant. Common attempts to change or clear the caller token are blocked.
+This is hook-enforced **thread binding**, not OS process isolation. Programs run with your account. Child processes can inherit values, and expiry or locking cannot erase credentials a running process already received. A separately launched Claude/Codex thread needs separate approval. Access is not scoped to a project or API endpoint, and these guardrails cannot stop malicious code running as you.
 
-This is hook-enforced **session binding**, not OS process isolation. Caller tokens also support bookkeeping and protected keys when controls are off; they do not restrict ordinary key access in that mode. Programs run with your account, child processes can inherit values, and locking cannot erase a value a running program already received.
-
-## Protections that stay on in both modes
+### Protections that stay on
 
 - **Encrypted storage:** values live in the selected key store, rather than plaintext project files.
 - **Exposure checks:** hooks block common attempts to print keys, read secret files, or write detected values into commands and files.
 - **Filtered output:** hooked commands mask matching values and their base64 forms as `<concealed by keywarden>`. `keys run` masks literal values.
 - **Local cleanup:** a helper attempts transcript redaction in the background without replacing the live file.
 
-**Pasting has limits.** Claude's plugin replaces detected values before forwarding to the model. Codex and Claude without the plugin continue with the original prompt, so the initial paste can reach the model and local history. Redaction cannot erase in-memory context, provider copies, backups, or every local log. Detection and filtering are guardrails; they cannot stop malicious code running as you.
+**Pasting has limits.** Claude's plugin replaces detected values before forwarding to the model. Codex and Claude without the plugin continue with the original prompt, so the initial paste can reach the model and local history. Redaction cannot erase in-memory context, provider copies, backups, or every local log. Use `keys add NAME --clipboard` to avoid pasting values into chat.
 
-To keep the value out of chat entirely, copy it and run `keys add NAME --clipboard` in your terminal. That saves it and clears the clipboard.
+## Supported backends and optional controls
 
-## Other optional layers
-
-| Layer | Purpose | Status |
+| Backend / layer | Purpose | Status |
 | --- | --- | --- |
-| **1Password** | Synced keys and shared vaults. Connect its app and CLI, then run `keys setup 1password`. When approvals are enabled, unlocking 1Password can approve a caller; unsuccessful unlocks fall back to chat. Set `"unlock_1password": false` in config.json to use chat approval. | Fake CLI tested; real vault authentication and unlock prompts unverified. |
-| **Phone / biometrics** | `keys approvals phone` requires phone or local biometric approval for each caller. Set up the phone with `keys phone`. | Signature logic tested; real phone, Touch ID, and Windows Hello unverified. |
-| **Protected keys** | `keys protect NAME` keeps an extra approval check on one key, even when ordinary approval controls are off. | Removing protection requires approval. |
+| **Local OS store — default** | macOS Keychain or Windows Credential Manager. Both agents use the same store on this computer. | macOS tested; real Windows execution unverified. |
+| **1Password** | Synced keys and shared vaults. Run `keys setup 1password`. Unlocking 1Password can approve a thread; unsuccessful unlocks fall back to chat. Set `"unlock_1password": false` in config.json to use chat approval. | Fake CLI tested; real authentication and unlock prompts unverified. |
+| **Phone / biometrics** | `keys approvals phone` requires phone or local biometric approval. Set up the phone with `keys phone`. | Signature logic tested; real phone, Touch ID, and Windows Hello unverified. |
+| **Protected keys** | `keys protect NAME` keeps an extra approval check. Pasting or naming it does not bypass that check. | Removing protection requires approval. |
 
-With 1Password, `keys strict on` disables local caching and reads fresh through its authentication. This is independent of session binding; 1Password controls when it prompts.
+With 1Password, `keys strict on` disables local caching and reads fresh through its authentication. This is independent of thread approval; 1Password controls when it prompts.
+
+Approval is on by default (`keys approvals on`, also called `chat`). You can explicitly disable it with `keys approvals off`, which requires confirmation. When off, ordinary keys become available automatically to all local threads and subagents. **`keys lock` does not revoke automatic access in that mode.** Protected keys retain their extra checks.
 
 <details>
 <summary><strong>Useful commands</strong></summary>
@@ -144,16 +124,17 @@ With 1Password, `keys strict on` disables local caching and reads fresh through 
 | Command | Purpose |
 | --- | --- |
 | `keys list` / `keys status` | Find saved names and see access mode and grants. |
-| `keys approvals` / `on` / `off` | Inspect, enable, or disable the optional approval layer. |
+| `keys approvals` / `on` / `off` | Inspect, enable, or disable thread approval. |
+| `keys lock [NAME ...]` | Revoke future loading for this thread and its helpers; from your terminal, revoke for all threads. |
 | `keys note NAME "description"` | Tell agents what a key is for. |
 | `keys add NAME --clipboard` | Save a copied key without pasting into chat. |
 | `keys import FILE.env` | Save keys from an existing file. |
-| `keys run NAME -- command` | Pass selected keys to a program; asks only when the configured policy requires it. |
+| `keys run NAME -- command` | Pass selected keys to a program under the configured approval policy. |
 | `keys rename OLD NEW` / `keys remove NAME` | Rename or delete through the configured approval policy. |
 | `keys switch 1password` / `keys switch local` | Copy keys to another store and select it. Old copies remain. |
 | `keys rescue --save --redact` | Save recognized keys and scrub Claude's local logs; does not search Codex logs. |
 
-Access requests and grants are recorded in `~/.agent-keys/use.log`. Non-strict 1Password reads use OS-store cache copies while grants are active. In automatic mode, access is renewed without asking; enabling approval controls clears previous automatic grants and cached copies.
+Access requests and grants are recorded in `~/.agent-keys/use.log`. Non-strict 1Password reads use OS-store cache copies while grants are active. Enabling approval clears automatic grants and cached copies.
 
 Uninstall with `python3 install.py --uninstall`. Saved keys stay in their store.
 
@@ -165,6 +146,6 @@ Uninstall with `python3 install.py --uninstall`. Saved keys stay in their store.
 python3 test_all.py
 ```
 
-Tests cover default automatic access, enabling/disabling controls, separate session and subagent approvals, both agents' native hooks, storage, output masking, and transcript cleanup. Native tests use synthetic keys and a local model stub; no real model API is called. Plugin tests cover literal replacement, Unicode, multiline/repeated values, launcher selection, and safe failure; they use Node.js 22.6+ when available. Shell selection on Windows is mocked; real Windows, 1Password authentication, and approval hardware remain unverified. Phone tests need `cryptography`; shell tests need Bash. `python3 e2e_claude.py` separately tests the enabled control with real Claude sessions using your account.
+Tests cover approval-on defaults, up-front named consent, thread/subagent sharing, subprocess inheritance, unrelated-thread isolation, expiry and lock, both agents' native hooks, storage, output masking, and transcript cleanup. Native tests use synthetic keys and a local model stub; no real model API is called. Plugin tests cover literal replacement, Unicode, multiline/repeated values, launcher selection, and safe failure; they use Node.js 22.6+ when available. Shell selection on Windows is mocked; real Windows, 1Password authentication, and approval hardware remain unverified. Phone tests need `cryptography`; shell tests need Bash. `python3 e2e_claude.py` separately tests real Claude sessions using your account.
 
 Hook references: [Codex](https://learn.chatgpt.com/docs/hooks), [Claude Code](https://code.claude.com/docs/en/hooks).

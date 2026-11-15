@@ -14,9 +14,8 @@ def main():
         import keys
         data = json.loads(sys.stdin.read() or "{}") if not sys.stdin.isatty() else {}
         codex = "--codex" in sys.argv[1:]
-        sid = data.get("session_id") or ("codex" if codex else "claude")
         names = sorted(keys.existing_names())
-        granted = sorted(approve.grants(f"codex:{sid}" if codex else sid))
+        granted = sorted(approve.grants(approve.session_caller(data, codex)))
         meta = keys.load_json(keys.META, {})
     except BaseException:
         sys.exit(0)
@@ -29,7 +28,8 @@ def main():
             "before saying you don't have it: run keys grant NAME --for \"why\", then use \"$NAME\" in commands. " +
             ("Approval controls are off: ordinary saved keys work automatically for agents and subagents. "
              if approve.settings()[0] == "auto" else
-             "Approvals belong to one session: a subagent you start asks for its own. ") +
+             "Approval is required for this thread; its subagents and subprocesses share approved keys and expiry. "
+             "Other saved keys need permission. The user can preapprove named keys with: approve NAME1 NAME2 for 8h. ") +
             "Load the keywarden skill for the details.")
     if granted:
         text += f" Granted now: {', '.join(granted)}."

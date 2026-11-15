@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 910 260" width="910" height="260" role="img" aria-labelledby="title desc" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
-  <title id="title">Give a key. Keep building. Add control if you want.</title>
-  <desc id="desc">Keys are saved once and work automatically in Claude, Codex, and their subagents. Optional approval controls require separate access for every session and subagent. Local redaction is best-effort.</desc>
+  <title id="title">Save once. Approve a thread. Delegate safely.</title>
+  <desc id="desc">Save keys in one shared store. Approve named keys for a Claude or Codex thread. Its subagents and subprocesses share the same keys and expiry. Other threads ask separately.</desc>
   <style>
     .bg { fill:#ffffff; } .box { fill:#f6f8fa; stroke:#d0d7de; }
     .vault { fill:#eef4ff; stroke:#0969da; } .use { fill:#effaf3; stroke:#1a7f37; }
@@ -15,22 +15,22 @@
   </style>
   <rect class="bg" width="910" height="260" rx="12"/>
   <rect class="vault" x="20" y="25" width="260" height="160" rx="12"/>
-  <text class="t" x="40" y="59" font-size="20" font-weight="700">1. Give a task + key</text>
+  <text class="t" x="40" y="59" font-size="20" font-weight="700">1. Save keys once</text>
   <text class="code" x="40" y="92">"Build this with this key…"</text>
-  <text class="t" x="40" y="126" font-size="15">Talk to your agent normally.</text>
-  <text class="muted" x="40" y="153" font-size="13">keywarden saves the detected key.</text>
+  <text class="t" x="40" y="126" font-size="15">One store. Claude + Codex.</text>
+  <text class="muted" x="40" y="153" font-size="13">Use saved names on the next task.</text>
   <path class="arrow" d="M291 105 H320 l-7 -5 m7 5 l-7 5"/>
   <rect class="box" x="325" y="25" width="260" height="160" rx="12"/>
-  <text class="t" x="345" y="59" font-size="20" font-weight="700">2. Keep building</text>
-  <text class="code" x="345" y="92">"Saved. Ready to use."</text>
-  <text class="t" x="345" y="126" font-size="15">Works in both agents + subagents.</text>
-  <text class="muted" x="345" y="153" font-size="13">No approval prompts by default.</text>
+  <text class="t" x="345" y="59" font-size="20" font-weight="700">2. Approve this thread</text>
+  <text class="code" x="345" y="92">approve API_KEY for 8h</text>
+  <text class="t" x="345" y="126" font-size="15">Name the keys and set a duration.</text>
+  <text class="muted" x="345" y="153" font-size="13">Other saved keys need permission.</text>
   <path class="arrow" d="M596 105 H625 l-7 -5 m7 5 l-7 5"/>
   <rect class="use" x="630" y="25" width="260" height="160" rx="12"/>
-  <text class="t" x="650" y="59" font-size="20" font-weight="700">3. Optional control</text>
-  <text class="code" x="650" y="92">keys approvals on</text>
-  <text class="t" x="650" y="126" font-size="15">Each session + subagent asks.</text>
-  <text class="muted" x="650" y="153" font-size="13">Off by default. Enable any time.</text>
-  <text class="t" x="455" y="218" text-anchor="middle" font-size="15" font-weight="600">Claude Code + local Codex · One shared key store</text>
-  <text class="muted" x="455" y="243" text-anchor="middle" font-size="13">Encrypted storage and exposure checks stay on. Local transcript redaction is best-effort.</text>
+  <text class="t" x="650" y="59" font-size="20" font-weight="700">3. Let helpers work</text>
+  <text class="code" x="650" y="92">Thread + subagents</text>
+  <text class="t" x="650" y="126" font-size="15">Child processes share keys.</text>
+  <text class="muted" x="650" y="153" font-size="13">Shared expiry. No extra approval.</text>
+  <text class="t" x="455" y="218" text-anchor="middle" font-size="15" font-weight="600">Claude Code + local Codex · Approvals on by default</text>
+  <text class="muted" x="455" y="243" text-anchor="middle" font-size="13">Other threads ask separately. Expiry stops future loading; running processes can retain values.</text>
 </svg>

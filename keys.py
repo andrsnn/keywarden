@@ -6,7 +6,7 @@
   keys setup local                  use this computer's key store (Windows Credential Manager or the Mac Keychain)
   keys switch 1password|local       move to the other store, copying every key across
   keys strict on|off                1Password only, read fresh each time behind its own check
-  keys approvals on|off|phone       optional session/subagent approvals (off by default); chat or phone
+  keys approvals on|off|phone       thread approvals (on by default); includes subagents and subprocesses
   keys protect NAME                 this key always needs a tap (keys unprotect NAME to undo)
   keys phone                        approve key use from your phone (then: keys phone test)
   keys add NAME [--clipboard | --from-env VAR] [--note "what it is"]
@@ -425,9 +425,9 @@ def _left(expiry):
 
 
 def cmd_approvals(args):
-    """keys approvals on|off|phone: optional per-session and subagent access control. Off by default."""
+    """keys approvals on|off|phone: thread access control, on by default and shared with descendants."""
     cfg = load_json(CONFIG, {})
-    words = {"chat": "on: each session and subagent asks in chat before using saved keys",
+    words = {"chat": "on: approve named keys per thread; its subagents and subprocesses share access and expiry",
              "phone": "phone: every key needs a tap on your phone",
              "auto": "off: saved keys are available automatically to agents and subagents"}
     mode = approve.settings()[0]
@@ -533,15 +533,14 @@ def cmd_status(args):
         if not names:
             return
     if approved:
-        print("Approved for this session. Its commands have these as environment variables:")
+        print("Approved for this thread, including its subagents and subprocesses:")
         for n in sorted(approved):
             print(f"  {n}  ({_left(approved[n])} left)")
     else:
         print("No keys are approved for this session." if who != approve.TERMINAL else "No keys are approved here.")
     others = approve.callers_holding()
     if others and mode != "auto":
-        print(f"{others} other session{'s' if others != 1 else ''} or subagent{'s' if others != 1 else ''} "
-              "hold their own approvals. Each one asks for its own.")
+        print(f"{others} other thread{'s' if others != 1 else ''} hold separate approvals.")
     rest = [n for n in names if n not in approved]
     if rest:
         print("Not approved: " + ", ".join(rest))

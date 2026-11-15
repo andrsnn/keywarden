@@ -146,7 +146,7 @@ def install(agent="both"):
         install_codex()
 
     print("\nNext: run  keys setup  to keep keys on this computer, or  keys setup 1password  to use 1Password.")
-    print("Optional: keys approvals on enables separate approval for each agent session and subagent.")
+    print("Approvals are on by default: each thread approves named keys; its subagents and subprocesses share access.")
     print("Optional: keys phone sets up phone approval.")
 
 
@@ -182,8 +182,8 @@ def install_codex():
     write_settings(d, CODEX_HOOKS)
     say(f"Codex hooks: added to {CODEX_HOOKS}")
     say("Codex: restart, then review and trust keywarden in /hooks (desktop: Settings > Hooks).")
-    say("Codex: saved keys work automatically by default, including in subagents.")
-    say("Optional: keys approvals on enables separate approval for every session and subagent.")
+    say("Codex: approve keys for this thread; its subagents and subprocesses share access and expiry.")
+    say("Existing approval settings are preserved. Run keys approvals on if previously disabled.")
     say("Codex: the original paste can reach the model/history. Local redaction is best-effort.")
 
 

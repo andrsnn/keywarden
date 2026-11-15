@@ -1,42 +1,35 @@
 ---
 name: keywarden
-description: Use keywarden when a task needs API keys or other secrets. Save keys once and use their names in commands. Saved keys work automatically by default; optional approval controls restrict each session and subagent separately.
+description: Use keywarden when a task needs API keys or other secrets. Save keys once, use them by name, and request thread approval before access. Approved keys are shared with that thread's subagents and subprocesses until expiry.
 ---
 
 # keywarden
 
 Use saved names such as `OPENAI_API_KEY`. Pass values through environment variables; never repeat a value in chat, source code, or tool arguments.
 
-## Default workflow: save and keep building
+## Approval workflow
 
-- The user gives you a task and a key. The prompt integration saves detected keys, tells you their names, and confirms the actual access mode.
-- Approval controls are **off by default**. Ordinary saved keys work automatically in Claude Code, Codex, other sessions, and their subagents. Do not ask the user to type approve in this mode.
-- Follow the capture notice in a short, normal reply: **“Saved NAME to keywarden. Ready to use.”** If access controls are enabled, use the actual approval duration from the notice. Do not quote hook names or implementation details. Continue the task after confirming.
-- Check `keys status` when unsure which mode is active. Explicitly protected keys still require their extra approval even when controls are off.
-- Claude's plugin replaces detected values with names before forwarding. Codex and Claude's command-hook fallback continue with the original prompt, so the pasted value can reach the model and local history. Local transcript cleanup is best-effort; do not claim every copy was erased.
-- If a pasted value was not detected, don't put it into another logged tool call to save it. Ask the person to run `keys add NAME --clipboard` in their terminal. This also works for users who prefer to keep values out of chat entirely.
+- **Approvals are on by default.** Each Claude Code or Codex thread approves specific key names. Its subagents and subprocesses share that approved set and expiry. Another thread needs separate approval, even though both agents use the same store.
+- A key supplied directly to the thread is saved and approved for 12 hours by default. Confirm the actual capture notice briefly, then continue. Protected keys and phone mode retain their extra checks.
+- Users can preapprove saved names on a separate line: `You'll need these keys: OPENAI_API_KEY, GITHUB_TOKEN for 8h` or `approve OPENAI_API_KEY GITHUB_TOKEN for 8h`. The prompt hook records this consent; no second approval reply is needed. Without a duration, named consent lasts one hour. A named approval with a new duration sets its new expiry.
+- Use `keys status` to check current access. For an unapproved key, run `keys grant NAME --for "what you're doing"`. If it requests chat approval, ask: **“Use NAME for this task? Reply approve, approve 30m, approve 2h, or no.”** End your turn and retry after approval. Stop using the key if denied.
+- A subagent can request an additional key; the user answers in the parent thread. That approval covers the thread and its other helpers too.
+- Long context, compaction, and resume do not renew grants. For Nightshift or other overnight work, ask for the named keys and duration up front. When an additional key or renewed access is needed, ask before continuing work that requires it. Do not treat remembering a key name or an old approval message as current permission.
+- `keys lock` from the thread or a subagent clears the whole thread's grants. The developer's terminal can clear everyone's. Expired or locked grants do not remove credentials already received by running processes.
+- With 1Password, `keys grant` may request an unlock first. Phone or protected-key policies may require a tap. Follow the configured route.
 
-## Optional approval and session binding
+`keys approvals on` (or `chat`) enables the default control; `keys approvals phone` enables phone/local biometric approval. Explicit `keys approvals off` settings are preserved. In that mode, ordinary keys work automatically across threads; do not ask for redundant chat approval or claim `keys lock` revokes automatic access. Change modes only when the user asks; follow required confirmation.
 
-`keys approvals on` (or `chat`) enables the extra control. `keys approvals phone` enables phone/local biometric approval. `keys approvals off` disables it. Change the mode only when the user asks; follow any confirmation it requires.
+## Capture and use keys
 
-When enabled:
-
-1. Use an already approved key. A key supplied directly to a session works in that session for 12 hours by default; follow the actual notice and status.
-2. Every other session and **every subagent** needs its own approval. Parent approval does not approve a subagent. Tell the user which caller needs which key and why.
-3. Run `keys grant NAME --for "what you're doing"`. If it requests chat approval, ask: **“Use NAME for this task? Reply approve, approve 30m, approve 2h, or no.”** End your turn. The user-message hook applies the reply to the requesting caller. Retry after approval; stop using the key if denied.
-4. With 1Password, `keys grant` may request an unlock first. Phone or protected-key policies may require a tap. Follow the configured route.
-5. `keys lock` from an agent clears that caller's grants. The developer's terminal can clear everyone's. Expired or locked grants do not remove credentials already received by running processes.
-
-When controls are off, ordinary access is renewed automatically. `keys lock` clears grants but does not revoke automatic access; do not claim it blocks future use. Enable the control if the user wants access to require approval.
-
-## Use and discover keys
-
-- Check names provided at session start or run `keys list` / `keys status`. Both agents use the same selected store; don't ask for a value already saved.
-- Hooked Bash and PowerShell commands receive available keys through environment variables: `"$OPENAI_API_KEY"` or `$env:OPENAI_API_KEY`. Code should read from the environment, such as `os.environ["OPENAI_API_KEY"]`.
+- Follow capture notices in a short normal reply, such as **“Saved NAME to keywarden. Approved for this thread (12 hours).”** Use the actual mode and duration. Do not quote hook names or implementation details.
+- Claude's plugin replaces detected values with names before forwarding. Codex and Claude's command-hook fallback continue with the original prompt, so the pasted value can reach the model and local history. Local cleanup is best-effort; do not claim every copy was erased.
+- If a pasted value was not detected, don't put it into another logged tool call to save it. Ask the person to run `keys add NAME --clipboard` in their terminal. This also avoids pasting values into chat entirely.
+- Check names provided at session start or run `keys list` / `keys status`. Don't ask for a value already saved.
+- Hooked Bash and PowerShell commands receive approved keys through environment variables: `"$OPENAI_API_KEY"` or `$env:OPENAI_API_KEY`. Code should read from the environment, such as `os.environ["OPENAI_API_KEY"]`.
 - Pass a key on stdin when supported: `docker login -u me --password-stdin <<< "$DOCKER_TOKEN"`.
 - Use environment references in headers: `curl -H "Authorization: Bearer $OPENAI_API_KEY" ...`.
-- `keys run NAME1 NAME2 -- command` passes selected keys explicitly under the configured policy. It also inherits its parent environment.
+- `keys run NAME1 NAME2 -- command` passes selected keys under the configured policy. It also inherits its parent environment.
 - Hooked output masks literal values and their base64 forms. `keys run` masks literal values. Avoid printing secrets even when a filter is present.
 
 ## Save generated keys
@@ -49,8 +42,8 @@ Other inputs: `keys add NAME --from-env VAR`, `keys import FILE.env`. Use `keys 
 
 ## Boundaries
 
-- Never set, clear, or copy `AGENT_KEYS_CALLER`; hooks manage caller identity, including protected-key checks and optional binding.
-- Do not bypass hooks blocking secret exposure or access to keywarden state. Use the supported commands and key names.
+- Never set, clear, or copy `AGENT_KEYS_CALLER`; hooks manage thread identity.
+- Do not bypass hooks blocking secret exposure or access to keywarden state. Use supported commands and key names.
 - These integrations require local hooks and the computer's key store. Codex requires hook trust review; cloud sessions do not inherit local keys.
-- This is hook-based session control, not OS process isolation. It does not stop malicious code running as the same user.
+- This is hook-based thread control, not OS process isolation. It does not stop malicious code running as the same user or limit which API calls an approved credential can make.
 - 1Password and phone/biometric layers exist, but real authentication and hardware remain unverified. Fake-backend tests are not real-device validation.

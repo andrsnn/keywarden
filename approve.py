@@ -2,10 +2,9 @@
 
 Both ask at the same time. The first answer wins. A "yes" covers those keys for a few minutes (a grant).
 
-Approvals are off by default: ordinary saved keys are made available automatically to every caller.
-When approvals are on, a grant belongs to one caller (a subagent is its own caller). The hook
-gives every command a caller token in AGENT_KEYS_CALLER, and keys.py looks the token up here, so a key one
-session was given doesn't reach another session, a subagent or Codex until the person approves it there too.
+Approvals are on by default. A grant belongs to one thread, including its subagents and subprocesses.
+The hook gives commands a thread token in AGENT_KEYS_CALLER; keys.py checks its named keys and expiry.
+A different Claude or Codex thread needs its own approval, even though storage is shared.
 A command with no token (a person at a terminal) is the caller "terminal".
 """
 import json
@@ -186,6 +185,7 @@ DURATIONS = [15, 60, 240, 720, 1440]  # minutes the phone offers
 
 def token_for(caller):
     """The token the hook puts in a command for this caller. Made on first use."""
+    caller = thread_scope(caller)
     now = time.time()
     table = {t: c for t, c in _load(CALLERS, {}).items()
              if isinstance(c, dict) and now - c.get("at", 0) < CALLER_DAYS * 86400}
@@ -208,7 +208,18 @@ def caller(token=None):
     if not token:
         return TERMINAL
     c = _load(CALLERS, {}).get(token)
-    return c["caller"] if isinstance(c, dict) and c.get("caller") else "unknown:" + token[:6]
+    return thread_scope(c["caller"]) if isinstance(c, dict) and c.get("caller") else "unknown:" + token[:6]
+
+
+def thread_scope(who):
+    """Old tokens can include /agent-id. They now use their parent thread's grants."""
+    return who.split("/", 1)[0]
+
+
+def session_caller(data, codex=False):
+    """Both agents supply the parent session_id for subagent hooks; agent_id does not narrow a grant."""
+    sid = data.get("session_id") or ("codex" if codex else "claude")
+    return f"codex:{sid}" if codex else sid
 
 
 def _all():
@@ -228,21 +239,25 @@ def _save(path, data):
     path.write_text(json.dumps(data))
 
 
-def _set(names, expiry, who):
+def _set(names, expiry, who, replace=False):
+    settings()  # Adopt the default policy before creating a new grant.
+    who = thread_scope(who)
     a = _all()
     g = a.setdefault(who, {})
     for n in names:
-        g[n] = max(expiry, g.get(n, 0))
+        g[n] = expiry if replace else max(expiry, g.get(n, 0))
     _save(GRANTS, {"callers": a})
 
 
 def grants(who=None):
     """Keys this caller may use right now: {name: when the approval ends}."""
-    return _all().get(caller() if who is None else who, {})
+    settings()  # Old implicit automatic grants must not survive the approval-on migration.
+    return _all().get(caller() if who is None else thread_scope(who), {})
 
 
 def all_granted():
     """Every key some caller may use now, with the latest end: for the 1Password copies."""
+    settings()
     out = {}
     for g in _all().values():
         for n, v in g.items():
@@ -276,12 +291,19 @@ def span(minutes):
 
 def settings():
     """(mode, protected keys, minutes a grant lasts). mode is how a key without a grant gets one:
-    "chat": the agent asks you in the chat and you reply approve.
+    "chat" (the default): the agent asks you in the chat and you reply approve.
     "phone": every key needs a tap on your phone (keys approvals phone).
-    "auto" (the default): granted at once with no question (keys approvals off)."""
+    "auto": granted at once with no question (keys approvals off)."""
     cfg = _load(STATE / "config.json", {})
+    if "approvals" not in cfg:
+        # Previous versions implicitly allowed automatic access. Do not carry those grants into the
+        # approval-on default. Record the choice once so subsequent reads preserve new approvals.
+        lock(who="all")
+        PENDING.unlink(missing_ok=True)
+        cfg["approvals"] = "chat"
+        _save(STATE / "config.json", cfg)
     mode = {True: "phone", False: "auto", "phone": "phone", "auto": "auto", "off": "auto",
-            "chat": "chat"}.get(cfg.get("approvals", "auto"), "chat")
+            "chat": "chat"}.get(cfg.get("approvals", "chat"), "chat")
     return mode, set(cfg.get("protected", [])), cfg.get("auto_minutes", 60)
 
 
@@ -375,11 +397,11 @@ def paste_minutes():
     return _load(STATE / "config.json", {}).get("paste_minutes", PASTE_MINUTES)
 
 
-def grant_from_prompt(names, what, who=TERMINAL):
-    """Giving a session a key is the approval: the session that was given it can use it (paste_minutes),
-    and no other caller can. Protected keys and phone mode still ask.
+def grant_from_prompt(names, what, who=TERMINAL, minutes=None):
+    """Giving a thread a key approves that thread and its descendants, not other threads.
+    Protected keys and phone mode still ask.
 
-    Called by prompt capture only. `what` is the message with every value replaced by its name.
+    Called by prompt capture or explicit named consent. `what` contains names, never secret values.
     """
     mode, protected, _ = settings()
     if mode == "auto":
@@ -387,8 +409,9 @@ def grant_from_prompt(names, what, who=TERMINAL):
     allowed = sorted(set(names) - protected) if mode != "phone" else []
     if not allowed:
         return []
-    minutes = paste_minutes()
-    _set(allowed, time.time() + minutes * 60, who)
+    explicit_duration = minutes is not None
+    minutes = paste_minutes() if minutes is None else minutes
+    _set(allowed, time.time() + minutes * 60, who, replace=explicit_duration)
     log_use(allowed, what, f"given in the chat, so approved for {span(minutes)} ({who})")
     return allowed
 
@@ -488,7 +511,7 @@ def lock(names=None, who="all"):
     """End the approval for these keys (or every key), for one caller or for every caller."""
     a = _all()
     for c in list(a):
-        if who != "all" and c != who:
+        if who != "all" and thread_scope(c) != thread_scope(who):
             continue
         a[c] = {k: v for k, v in a[c].items() if names and k not in names}
         if not a[c]:

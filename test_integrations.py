@@ -149,7 +149,7 @@ class CodexFlowTests(unittest.TestCase):
         meta = (self.state / "meta.json").read_text()
         self.assertIn("pasted in a Codex chat", meta)
         self.assertNotIn(self.value, meta)
-        self.assertEqual(self.message("use DEMO_API_KEY"), {})
+        self.assertEqual(self.message("what is DEMO_API_KEY for?"), {})
 
     def test_fallback_privacy_note_is_separate_and_once_per_session(self):
         from prompt_hook import PRIVACY_NOTE
@@ -168,7 +168,7 @@ class CodexFlowTests(unittest.TestCase):
     def test_task_paste_approves_the_session_then_expiry_requires_chat(self):
         before = time.time()
         out = self.message("Build an app using this key.\nkey DEMO_API_KEY " + self.value)
-        self.assertIn("Saved DEMO_API_KEY to keywarden. Approved for this session (12 hours).",
+        self.assertIn("Saved DEMO_API_KEY to keywarden. Approved for this thread (12 hours).",
                       out["hookSpecificOutput"]["additionalContext"])
         grants = json.loads((self.state / "grants.json").read_text())["callers"]
         self.assertEqual(list(grants), ["codex:codex"])  # only the chat it was given in
@@ -197,7 +197,7 @@ class CodexFlowTests(unittest.TestCase):
             with self.subTest(extra=extra):
                 (self.state / "config.json").write_text(json.dumps({"backend": "1password", "strict": True, **extra}))
                 out = self.message("Build an app with this key.\nkey DEMO_API_KEY " + self.value)
-                self.assertNotIn("Approved for this session", out["hookSpecificOutput"]["additionalContext"])
+                self.assertNotIn("Approved for this thread", out["hookSpecificOutput"]["additionalContext"])
                 self.assertIn("Approval needed before use", out["hookSpecificOutput"]["additionalContext"])
                 self.assertFalse((self.state / "grants.json").exists())
                 self.assertIn("Request approval", out["hookSpecificOutput"]["additionalContext"])
@@ -207,7 +207,7 @@ class CodexFlowTests(unittest.TestCase):
             with self.subTest(request=request):
                 (self.state / "grants.json").unlink(missing_ok=True)
                 out = self.message(request + ".\nkey DEMO_API_KEY " + self.value)
-                self.assertIn("Approved for this session", out["hookSpecificOutput"]["additionalContext"])
+                self.assertIn("Approved for this thread", out["hookSpecificOutput"]["additionalContext"])
                 grants = json.loads((self.state / "grants.json").read_text())["callers"]
                 self.assertEqual(list(grants), ["codex:codex"])
                 self.assertNotEqual(self.grant().returncode, 0)  # anyone else still asks
@@ -218,7 +218,7 @@ class CodexFlowTests(unittest.TestCase):
         out = json.loads(result.stdout)
         self.assertEqual(out["text"], "Build an app with this key.\nkey DEMO_API_KEY [DEMO_API_KEY]")
         self.assertEqual(out["approved"], ["DEMO_API_KEY"])
-        self.assertEqual(out["notice"], "Saved DEMO_API_KEY to keywarden. Approved for this session (12 hours).")
+        self.assertEqual(out["notice"], "Saved DEMO_API_KEY to keywarden. Approved for this thread (12 hours).")
         self.assertNotIn(self.value, result.stdout)
         self.assertEqual(self.grant(self.token()).returncode, 0)
 

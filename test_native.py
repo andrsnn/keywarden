@@ -92,8 +92,8 @@ def main(mode):
     case.setUp()
     config = case.state / 'config.json'
     cfg = json.loads(config.read_text())
-    if mode == 'auto':
-        cfg.pop('approvals')  # Exercise the actual default, not only an explicit off setting.
+    if mode == 'chat':
+        cfg.pop('approvals')  # Exercise the approval-on default.
     else:
         cfg['approvals'] = mode
     config.write_text(json.dumps(cfg))
@@ -122,7 +122,7 @@ def main(mode):
             assert len(grants) == 1  # only the session the key was given in
             duration = 12 * 3600 if mode == 'chat' else 3600
             assert duration - 100 < list(grants.values())[0]['OPENAI_API_KEY'] - time.time() <= duration
-            notice = (b'Saved OPENAI_API_KEY to keywarden. Approved for this session (12 hours).' if mode == 'chat' else
+            notice = (b'Saved OPENAI_API_KEY to keywarden. Approved for this thread (12 hours).' if mode == 'chat' else
                       b'Saved OPENAI_API_KEY to keywarden. Ready to use.')
             assert any(notice in body
                        for body in server.requests)

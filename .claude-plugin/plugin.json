@@ -1,5 +1,5 @@
 {
   "name": "keywarden",
-  "version": "0.4.1",
-  "description": "One key store for Claude Code and Codex. Keys work automatically, with optional approvals for each session and subagent."
+  "version": "0.5.0",
+  "description": "One key store for Claude Code and Codex. Approve named keys for a thread, including its subagents and subprocesses."
 }

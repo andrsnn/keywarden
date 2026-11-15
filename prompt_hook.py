@@ -22,6 +22,13 @@ TIME = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d
 IS_CODEX = "--codex" in sys.argv[1:]
 AGENT = "Codex" if IS_CODEX else "Claude"
 PRIVACY_NOTE = "The original paste may remain in chat history or with the model provider, even after saving the key."
+# Accept a complete, explicit directive line, rather than guessing consent from task prose or key mentions.
+NAMED_APPROVAL = re.compile(
+    r"(?m)^[ \t]*(?i:approve|use|you['’]ll need(?: these keys)?|you (?:can|may) use|this thread (?:can|may) use)"
+    r"[ \t:]+(?P<names>[A-Z][A-Z0-9_]*(?:(?:[ \t]*,[ \t]*(?:and[ \t]+)?|[ \t]+and[ \t]+|[ \t]+)"
+    r"[A-Z][A-Z0-9_]*)*)(?:[ \t]+(?i:for)[ \t]+(?P<duration>\d+(?:\.\d+)?[ \t]*"
+    r"(?i:m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)))?[ \t]*[.!]?[ \t]*$"
+)
 
 
 def block(reason):
@@ -51,6 +58,48 @@ def minutes_in(text):
     return n * (1440 if unit.startswith("d") else 60 if unit.startswith("h") else 1)
 
 
+def approve_named_keys(text, data, agent):
+    """User-only explicit consent to saved names, scoped to this thread and a finite duration."""
+    import approve
+    import keys
+    directives, fence = [], None
+    for line in text.splitlines():
+        marker = re.match(r"^[ \t]*(`{3,}|~{3,})", line)
+        if marker:
+            if fence is None:
+                fence = marker[1]
+            elif marker[1][0] == fence[0] and len(marker[1]) >= len(fence):
+                fence = None
+            continue
+        if fence is None and (directive := NAMED_APPROVAL.fullmatch(line)):
+            directives.append(directive)
+    if not directives:
+        return ""
+    contexts = []
+    saved = set(keys.existing_names())
+    for directive in directives:
+        names = re.findall(r"\b[A-Z][A-Z0-9_]*\b", directive["names"])
+        # Unknown words/names invalidate the line, so qualifiers cannot accidentally expand consent.
+        if not names or not set(names) <= saved:
+            continue
+        minutes = minutes_in(directive["duration"]) if directive["duration"] else approve.settings()[2]
+        if minutes is None or minutes <= 0:
+            continue
+        allowed = approve.grant_from_prompt(names, directive[0], session_caller(data, agent), minutes)
+        if allowed:
+            if approve.settings()[0] == "auto":
+                contexts.append("keywarden: approvals are off; ordinary saved keys are available automatically.")
+            else:
+                contexts.append(f"keywarden: approved {', '.join(allowed)} for this thread, including its subagents "
+                                f"and subprocesses, for {approve.span(minutes)}. Confirm briefly, then continue. "
+                                "Other saved keys still require approval.")
+        pending = sorted(set(names) - set(allowed))
+        if pending:
+            contexts.append(f"keywarden: {', '.join(pending)} still requires the configured extra approval; "
+                            "request it with keys grant before use.")
+    return " ".join(contexts)
+
+
 def scrub_later(transcript, values):
     """Best-effort cleanup of the supplied local transcript, including writes after the hook returns."""
     if not transcript:
@@ -74,10 +123,9 @@ def scrub_later(transcript, values):
 
 
 def session_caller(data, agent):
-    """The caller a pasted key goes to: the session the person typed into. The same name hook.py gives that
-    session's own commands (a subagent's commands carry its agent id too, so they don't match)."""
-    sid = data.get("session_id") or ("codex" if agent == "Codex" else "claude")
-    return f"codex:{sid}" if agent == "Codex" else sid
+    """The thread the person typed into, shared with its subagents and subprocesses."""
+    import approve
+    return approve.session_caller(data, agent == "Codex")
 
 
 def privacy_notice(data, agent):
@@ -137,7 +185,7 @@ def capture(data, agent):
         raise ValueError("a detected value remained after replacement")
     names = [name for name, _ in results]
     who = session_caller(data, agent)
-    # Giving a session a key is the approval: that session can use it. Protected keys and phone mode still ask.
+    # Giving a thread a key approves its descendants too. Protected keys and phone mode still ask.
     approved = approve.grant_from_prompt(names, text, who)
     pending = [name for name in names if name not in approved]
     notice = f"Saved {', '.join(names)} to keywarden."
@@ -146,13 +194,14 @@ def capture(data, agent):
         if approve.settings()[0] == "auto":
             notice += " Ready to use." if not pending else f" Ready to use: {', '.join(approved)}."
         else:
-            notice += (f" Approved for this session ({span})." if not pending
-                       else f" Approved for this session ({span}): {', '.join(approved)}.")
+            notice += (f" Approved for this thread ({span})." if not pending
+                       else f" Approved for this thread ({span}): {', '.join(approved)}.")
     if pending:
         notice += " Approval needed before use." if not approved else f" Approval still needed: {', '.join(pending)}."
     context = (f"keywarden: {notice} Confirm this in one short sentence in your normal reply, then continue their task. "
                "Do not quote hook names or implementation details. "
                f"Use the saved names {', '.join(names)}; never repeat or write the values. "
+               "Thread approval includes its subagents and subprocesses, with the same expiry. "
                'Run keys status, then use "$NAME" in commands. ')
     if pending:
         context += f"{', '.join(pending)} has no new grant from this paste. Request approval with keys grant before use. "
@@ -196,11 +245,15 @@ def main():
             block("keywarden couldn't finish saving or approving the key. Your message wasn't sent. Check keys setup.")
         disclosure = (f" {AGENT}'s prompt hook cannot replace your original message; the pasted value can reach "
                       "the model and local history. Local redaction is best-effort.")
-        context = (out["context"] + disclosure + " Any privacy note is handled separately by the app. "
+        context = (out["context"] + " " + approve_named_keys(out["text"], data, AGENT) + disclosure +
+                   " Any privacy note is handled separately by the app. "
                    "Do not repeat that note or the hook explanation in your reply.")
         tell_agent(context, privacy_notice(data, AGENT))
     try:
         import approve
+        named = approve_named_keys(text, data, AGENT)
+        if named:
+            tell_agent(named)
         # The word approve (or no) answers a request from up to 12 hours ago. A loose yes or ok only
         # answers one from the last 30 minutes, so it can't grant an old request by accident.
         window = approve.APPROVE_WORD_MINUTES if APPROVE_WORD.match(text) or DENY.match(text) else approve.PENDING_MINUTES

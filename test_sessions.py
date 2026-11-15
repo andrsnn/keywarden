@@ -1,5 +1,5 @@
-"""Run: python test_sessions.py   Checks that approvals belong to one caller (a session, or a subagent inside it):
-the session a key was given to can use it, and a subagent, another session or Codex has to ask. Uses a test key
+"""Run: python test_sessions.py   Checks that approvals belong to one thread, including its subagents and subprocesses:
+another Claude or Codex thread must ask separately. Uses a test key
 store, so real keys are never touched."""
 import json
 import os
@@ -60,18 +60,18 @@ def expect(name, cond):
 
 try:
     run("keys.py", "setup", "local")
-    run("keys.py", "approvals", "on")  # Session and subagent isolation is an explicit opt-in.
+    run("keys.py", "approvals", "on")  # Explicit on remains compatible with the default.
     s1, s1_sub, s2 = token("S1"), token("S1", "A1"), token("S2")
     expect("a session keeps one token", token("S1") == s1)
-    expect("a subagent gets its own token", s1_sub != s1)
+    expect("a subagent shares the thread token", s1_sub == s1)
     expect("another session gets its own token", s2 != s1)
 
     msg = "here is my weather api key, save this: " + VALUE + " and get the forecast"
     out = json.loads(run("prompt_hook.py", "--rewrite", stdin=json.dumps({"prompt": msg, "session_id": "S1"}))[1])
     expect("giving a key with a task approves it at once", out.get("approved") == ["WEATHER_API_KEY"]
-           and "Approved for this session" in out.get("notice", ""))
+           and "Approved for this thread" in out.get("notice", ""))
     expect("the session the key was given to gets it", gets_key(s1))
-    expect("its subagent doesn't", not gets_key(s1_sub))
+    expect("its subagent shares approval", gets_key(s1_sub))
     expect("another session doesn't", not gets_key(s2))
     expect("a terminal with no token doesn't", not gets_key(None))
     expect("a made-up token gets nothing", not gets_key("not-a-real-token-123"))
@@ -81,21 +81,23 @@ try:
     expect("the session's commands load its keys", " env)" in cmd and "mask.py" in cmd)
     code, out = hook("S1", "curl https://example.com", agent="A1")
     cmd = json.loads(out)["hookSpecificOutput"]["updatedInput"]["command"]
-    expect("a subagent's commands only say who is asking", " env)" not in cmd and cmd.startswith("export "))
+    expect("a subagent's commands load and mask approved keys", " env)" in cmd and "mask.py" in cmd)
 
     code, out = run("keys.py", "grant", "WEATHER_API_KEY", "--for", "the forecast", token=s2)
     expect("another session has to ask", code != 0 and "Reply approve" in out)
     out = say("approve", "S2")
     expect("approve answers that request", "approved WEATHER_API_KEY" in out)
     expect("the session that asked gets the key", gets_key(s2))
-    expect("the subagent that didn't ask still doesn't", not gets_key(s1_sub))
+    expect("the first thread's subagent retains its parent approval", gets_key(s1_sub))
 
+    run("keys.py", "lock", token=s1)
+    expect("locking the thread also locks its subagent", not gets_key(s1_sub))
     code, out = run("keys.py", "grant", "WEATHER_API_KEY", "--for", "subagent work", token=s1_sub)
-    expect("a subagent has to ask", code != 0 and "Reply approve" in out)
+    expect("a subagent asks when its thread has no approval", code != 0 and "Reply approve" in out)
     say("approve", "S2")
     expect("approve in another session doesn't answer the subagent", not gets_key(s1_sub))
     say("approve 15m", "S1")
-    expect("approve in the subagent's own session gives it the key", gets_key(s1_sub))
+    expect("approve in the parent thread grants both parent and subagent", gets_key(s1_sub) and gets_key(s1))
 
     run("keys.py", "lock", token=s1)
     expect("keys lock in a session ends only its own approval", not gets_key(s1) and gets_key(s2))
