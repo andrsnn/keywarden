@@ -70,6 +70,7 @@ def expect(name, cond):
 
 def unit_tests():
     os.environ["AGENT_KEYS_STATE"] = str(tmp)
+    os.environ.pop("AGENT_KEYS_NO_BIOMETRICS", None)  # these cases check how the helper is found
     sys.path.insert(0, str(HERE))
     import local_auth
     expect("Verified approves", local_auth.result("Verified\n", 0) == "yes")
