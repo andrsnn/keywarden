@@ -2,3 +2,4 @@ __pycache__/
 *.agent-keys-tmp
 hooks/python-path.txt
 .claude-plugin/types/
+*.stackdump

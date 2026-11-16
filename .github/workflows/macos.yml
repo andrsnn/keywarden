@@ -1,0 +1,39 @@
+name: macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  touchid:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python3 -m pip install cryptography
+      - name: Build the Touch ID helper
+        run: swiftc -O touchid.swift -o "$RUNNER_TEMP/touchid"
+      - name: The helper answers --check and stops at its timeout
+        run: |
+          "$RUNNER_TEMP/touchid" --check
+          python3 - <<'PY'
+          import os, subprocess, time
+          b = os.path.join(os.environ["RUNNER_TEMP"], "touchid")
+          start = time.time()
+          r = subprocess.run([b, "keywarden CI test"], capture_output=True, text=True, timeout=60,
+                             env=dict(os.environ, AGENT_KEYS_TIMEOUT="3"))
+          last = (r.stdout.strip().splitlines() or [""])[-1]
+          took = time.time() - start
+          print(f"answer: {last!r} after {took:.1f}s")
+          assert last != "Verified", "nobody is here to approve, so it must not say Verified"
+          assert last in ("Timeout", "Canceled") or last.startswith("unavailable"), last
+          assert took < 30, took
+          PY
+      - name: Touch ID approval tests with the real helper
+        run: KEYWARDEN_TOUCHID_BIN="$RUNNER_TEMP/touchid" python3 test_touchid.py
+      - name: Full test suite
+        run: python3 test_all.py

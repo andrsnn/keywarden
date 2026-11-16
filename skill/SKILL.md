@@ -46,4 +46,5 @@ Other inputs: `keys add NAME --from-env VAR`, `keys import FILE.env`. Use `keys 
 - Do not bypass hooks blocking secret exposure or access to keywarden state. Use supported commands and key names.
 - These integrations require local hooks and the computer's key store. Codex requires hook trust review; cloud sessions do not inherit local keys.
 - This is hook-based thread control, not OS process isolation. It does not stop malicious code running as the same user or limit which API calls an approved credential can make.
+- `keys touchid on` (optional, off by default) makes `keys grant` open a Touch ID prompt on the Mac (Windows Hello on Windows) before asking in the chat. If it says the key was denied with Touch ID, tell the person; don't run the grant again in a loop. If it says the chat asks instead, ask in the chat as usual. Don't turn it on or off yourself unless the person asks.
 - 1Password and phone/biometric layers exist, but real authentication and hardware remain unverified. Fake-backend tests are not real-device validation.
