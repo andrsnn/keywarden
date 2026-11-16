@@ -112,11 +112,34 @@ This is hook-enforced **thread binding**, not OS process isolation. Programs run
 | **Local OS store — default** | macOS Keychain or Windows Credential Manager. Both agents use the same store on this computer. | macOS tested; real Windows execution unverified. |
 | **1Password** | Synced keys and shared vaults. Run `keys setup 1password`. Unlocking 1Password can approve a thread; unsuccessful unlocks fall back to chat. Set `"unlock_1password": false` in config.json to use chat approval. | Fake CLI tested; real authentication and unlock prompts unverified. |
 | **Phone / biometrics** | `keys approvals phone` requires phone or local biometric approval. Set up the phone with `keys phone`. | Signature logic tested; real phone, Touch ID, and Windows Hello unverified. |
+| **Touch ID / Windows Hello** | `keys touchid on` approves chat requests with a tap on this computer. Off by default. See below. | Fake approver tested on Windows and macOS. The Swift helper builds and times out on macOS CI. A real fingerprint tap is unverified. |
 | **Protected keys** | `keys protect NAME` keeps an extra approval check. Pasting or naming it does not bypass that check. | Removing protection requires approval. |
 
 With 1Password, `keys strict on` disables local caching and reads fresh through its authentication. This is independent of thread approval; 1Password controls when it prompts.
 
 Approval is on by default (`keys approvals on`, also called `chat`). You can explicitly disable it with `keys approvals off`, which requires confirmation. When off, ordinary keys become available automatically to all local threads and subagents. **`keys lock` does not revoke automatic access in that mode.** Protected keys retain their extra checks.
+
+### Approve with Touch ID (optional)
+
+On a Mac you can approve key requests with Touch ID instead of replying in the chat:
+
+```sh
+keys touchid on        # asks for one tap now to turn it on
+keys touchid test      # try it
+keys touchid off       # back to replying in the chat
+```
+
+When an agent runs `keys grant`, the Touch ID prompt opens on your Mac with the key names and the reason. A tap approves those keys for that thread. Cancel denies them. If nobody taps within 60 seconds (`keys touchid timeout SECONDS` changes this), or Touch ID can't ask, the agent asks in the chat as usual. On Windows the same commands use Windows Hello.
+
+Turning approval settings off, unprotecting a key and leaving strict mode still ask in the chat or on your phone, never with this tap.
+
+You can plug in your own approver, such as a hardware key script:
+
+```sh
+keys touchid use command -- /path/to/approve-prog --flag
+```
+
+keywarden runs the program with the request as its last argument and the timeout in seconds in `AGENT_KEYS_TIMEOUT`. The last line it prints decides: `Verified` approves, `Timeout` or a line starting with `unavailable` sends the request to the chat, and anything else denies it. With `--check` it should print `available`. Plugging in a program asks for your OK in the chat first, because that program can approve every key. Python code can add an approver with `local_auth.register(name, approver)`.
 
 <details>
 <summary><strong>Useful commands</strong></summary>
@@ -125,6 +148,7 @@ Approval is on by default (`keys approvals on`, also called `chat`). You can exp
 | --- | --- |
 | `keys list` / `keys status` | Find saved names and see access mode and grants. |
 | `keys approvals` / `on` / `off` | Inspect, enable, or disable thread approval. |
+| `keys touchid on` / `off` / `test` | Approve requests with Touch ID (Windows Hello on Windows) instead of the chat. |
 | `keys lock [NAME ...]` | Revoke future loading for this thread and its helpers; from your terminal, revoke for all threads. |
 | `keys note NAME "description"` | Tell agents what a key is for. |
 | `keys add NAME --clipboard` | Save a copied key without pasting into chat. |

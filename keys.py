@@ -7,6 +7,10 @@
   keys switch 1password|local       move to the other store, copying every key across
   keys strict on|off                1Password only, read fresh each time behind its own check
   keys approvals on|off|phone       thread approvals (on by default); includes subagents and subprocesses
+  keys touchid on|off|test          approve keys with Touch ID on a Mac (Windows Hello on Windows) instead of
+                                    replying in the chat; off by default (also: keys hello)
+  keys touchid use command -- PROG  approve with your own program instead (it prints Verified to approve)
+  keys touchid timeout SECONDS      how long to wait for a tap before the chat asks (default 60)
   keys protect NAME                 this key always needs a tap (keys unprotect NAME to undo)
   keys phone                        approve key use from your phone (then: keys phone test)
   keys add NAME [--clipboard | --from-env VAR] [--note "what it is"]
@@ -38,6 +42,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import approve  # noqa: E402
+import local_auth  # noqa: E402
 import local_store  # noqa: E402
 import stores  # noqa: E402
 
@@ -185,7 +190,8 @@ def cmd_setup(args):
 def setup_report(cfg):
     check = approve.local_check()
     hello = "Windows Hello" if IS_WIN else "Touch ID"
-    print(f"{hello}: {'ready' if check == 'available' else check}")
+    print(f"{hello}: {'ready' if check == 'available' else check}"
+          + ("" if local_auth.chosen() or check != "available" else " (to approve keys with it: keys touchid on)"))
     print(f"Phone approval: {'ready' if approve.phone_config() else 'off (run: keys phone)'}")
     print(f"On your phone you pick how long each approval lasts. An approval with {hello} lasts "
           f"{cfg.get('grant_minutes', 60):g} minutes (change it with: keys setup --grant-minutes N).")
@@ -453,6 +459,96 @@ def cmd_approvals(args):
     cfg["approvals"] = want
     save_json(CONFIG, cfg)
     print(f"Approvals are {words[want]}.")
+
+
+TOUCHID_USAGE = ("usage: keys touchid on|off|test, keys touchid use touchid|hello|command [-- PROGRAM ARGS], "
+                 "keys touchid timeout SECONDS")
+
+
+def cmd_touchid(args):
+    """keys touchid: approve keys with Touch ID (Windows Hello on Windows, or your own program) on this computer
+    instead of replying in the chat. Off by default. If nobody taps in time, the chat asks instead."""
+    cfg = load_json(CONFIG, {})
+    wait = local_auth.timeout()
+    if not args:
+        a = local_auth.enabled()
+        if a:
+            print(f"{a.label} approvals are on. A key request asks {a.label} on this computer first. If nobody "
+                  f"answers in {wait:g} seconds, the chat asks instead.")
+        else:
+            print("Approving with Touch ID or Windows Hello is off. Key requests are approved in the chat. "
+                  "Turn it on with: keys touchid on")
+        a = a or local_auth.for_taps()
+        if a:
+            check = a.check()
+            print(f"{a.label}: {'ready' if check == 'available' else check}")
+        if a and approve.settings()[0] != "chat":
+            print("Approvals aren't in chat mode, so chat requests don't use this. Phone mode and protected keys "
+                  "still use it alongside your phone.")
+        return
+    sub = args[0]
+    if sub == "off":
+        cfg.pop("local_approval", None)
+        save_json(CONFIG, cfg)
+        print("Approving with Touch ID or Windows Hello is off. Key requests are approved in the chat.")
+        return
+    if sub == "timeout":
+        try:
+            secs = float(args[1])
+        except (IndexError, ValueError):
+            die(TOUCHID_USAGE)
+        cfg["local_approval_timeout"] = max(5.0, secs)
+        save_json(CONFIG, cfg)
+        print(f"Waiting {max(5.0, secs):g} seconds for a tap before the chat asks.")
+        return
+    if sub == "test":
+        a = local_auth.enabled() or local_auth.for_taps()
+        if not a:
+            die("no approver works on this computer.")
+        ans = a.ask("a test from keys touchid test (this one doesn't unlock anything)", wait)
+        print({"yes": f"{a.label} approved.", "no": f"{a.label} said no.",
+               "timeout": f"Nobody answered {a.label} in {wait:g} seconds."}.get(ans, f"{a.label} isn't available: "
+                                                                                    f"{a.check()}"))
+        sys.exit(0 if ans == "yes" else 1)
+    if sub not in ("on", "use"):
+        die(TOUCHID_USAGE)
+    target = local_auth.platform_name() if sub == "on" else (args[1] if len(args) > 1 else None)
+    if not target:
+        die("Touch ID needs a Mac and Windows Hello needs Windows. To use your own program, run: "
+            "keys touchid use command -- PROGRAM ARGS")
+    if target not in local_auth.APPROVERS:
+        die(f"no approver named {target}. Pick one of: {', '.join(sorted(local_auth.APPROVERS))}")
+    a = local_auth.APPROVERS[target]
+    if target == "command":
+        prog = args[args.index("--") + 1:] if "--" in args else []
+        if not prog:
+            die("name the program: keys touchid use command -- PROGRAM ARGS")
+        # A program you pick can approve every key, so the person approves this change first.
+        if not approve.ask(["APPROVALS_CHANGE"], "let this program approve keys: " + " ".join(prog)[:150],
+                           minutes=1, force=True):
+            die("not approved, so nothing changed.")
+        approve.lock(["APPROVALS_CHANGE"])
+        cfg = load_json(CONFIG, {})
+        cfg["local_approval_command"] = prog
+        save_json(CONFIG, cfg)
+        check = a.check()
+        if check != "available":
+            print(f"Note: the program's --check says: {check}")
+    else:
+        check = a.check()
+        if check != "available":
+            die(f"{a.label} isn't available here: {check}")
+        # Turning it on takes a tap, so the person at this computer is the one choosing it.
+        ans = a.ask(f"approve keywarden keys with {a.label}", wait)
+        if ans != "yes":
+            die(f"{a.label} didn't approve, so it stays off.")
+        cfg = load_json(CONFIG, {})
+    cfg["local_approval"] = target
+    save_json(CONFIG, cfg)
+    print(f"{a.label} approvals are on. A key request asks {a.label} on this computer first. If nobody answers "
+          f"in {wait:g} seconds, the chat asks instead. Turn it off with: keys touchid off")
+    if approve.settings()[0] != "chat":
+        print("Approvals aren't in chat mode right now, so this applies once you run: keys approvals on")
 
 
 def cmd_protect(args):
@@ -1147,6 +1243,7 @@ def cmd_capture(args):
 
 
 COMMANDS = {"_capture": cmd_capture, "_scrub": cmd_scrub, "note": cmd_note, "setup": cmd_setup, "switch": cmd_switch, "strict": cmd_strict, "approvals": cmd_approvals,
+            "touchid": cmd_touchid, "hello": cmd_touchid,
             "protect": cmd_protect, "unprotect": cmd_unprotect, "phone": cmd_phone, "remove": cmd_remove, "lock": cmd_lock, "grant": cmd_grant, "status": cmd_status, "env": cmd_env, "add": cmd_add, "import": cmd_import, "list": cmd_list, "rename": cmd_rename, "ref": cmd_ref,
             "run": cmd_run, "rescue": cmd_rescue}
 

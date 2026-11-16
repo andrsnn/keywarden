@@ -136,7 +136,8 @@ def install(agent="both"):
         if shutil.which("swiftc"):
             (HOME / ".agent-keys").mkdir(exist_ok=True)
             r = subprocess.run(["swiftc", "-O", str(REPO / "touchid.swift"), "-o", str(HOME / ".agent-keys" / "touchid")])
-            say("Touch ID: ready" if r.returncode == 0 else "Touch ID: the helper didn't build (see the error above)")
+            say("Touch ID: ready (to approve keys with it: keys touchid on)" if r.returncode == 0
+                else "Touch ID: the helper didn't build (see the error above)")
         else:
             say("Touch ID: run  xcode-select --install  and then run install.py again")
 

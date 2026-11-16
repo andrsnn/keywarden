@@ -28,21 +28,8 @@ CALLERS = STATE / "callers.json"  # {token: {"caller": caller, "at": time}}, wri
 TERMINAL = "terminal"
 CALLER_DAYS = 30  # forget a caller token after this long
 HERE = Path(__file__).resolve().parent
-
-WIN_HELLO = r"""
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-$m = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
-  $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
-  $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
-function Await($op, $t) { $task = $m.MakeGenericMethod($t).Invoke($null, @($op)); $task.Wait(-1) | Out-Null; $task.Result }
-$V = [Windows.Security.Credentials.UI.UserConsentVerifier, Windows.Security.Credentials.UI, ContentType=WindowsRuntime]
-$a = Await ($V::CheckAvailabilityAsync()) ([Windows.Security.Credentials.UI.UserConsentVerifierAvailability])
-if ("$a" -ne 'Available') { Write-Output "unavailable $a"; exit }
-if ($env:AGENT_KEYS_CHECK_ONLY) { Write-Output 'available'; exit }
-$r = Await ($V::RequestVerificationAsync($env:AGENT_KEYS_REASON)) ([Windows.Security.Credentials.UI.UserConsentVerificationResult])
-Write-Output "$r"
-"""
-
+sys.path.insert(0, str(HERE))
+import local_auth  # noqa: E402
 
 POWERSHELL = (os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0",
                            "powershell.exe") if os.name == "nt" else "powershell")
@@ -58,45 +45,23 @@ def _load(path, default):
 # ---------- on the computer ----------
 
 def touchid_bin():
-    b = STATE / "touchid"
-    return [str(b)] if b.exists() else (["swift", str(HERE / "touchid.swift")] if shutil.which("swift") else None)
+    return local_auth.TouchID().argv()
 
 
 def local_check():
     """'available', or why the computer can't ask."""
-    if os.name == "nt":
-        env = dict(os.environ, AGENT_KEYS_CHECK_ONLY="1")
-        r = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", WIN_HELLO],
-                           capture_output=True, text=True, env=env, timeout=60)
-        return (r.stdout.strip() or r.stderr.strip() or "unavailable").splitlines()[-1]
-    if sys.platform == "darwin":
-        cmd = touchid_bin()
-        if not cmd:
-            return "unavailable: install Xcode command line tools (xcode-select --install), then rerun install.py"
-        r = subprocess.run(cmd + ["--check"], capture_output=True, text=True, timeout=120)
-        return r.stdout.strip() or "unavailable"
-    return "unavailable on this system"
+    a = local_auth.for_taps()
+    return a.check() if a else "unavailable on this system"
 
 
-def _local_ask(reason, out, procs):
-    if os.name == "nt":
-        p = subprocess.Popen([POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", WIN_HELLO],
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                             env=dict(os.environ, AGENT_KEYS_REASON=reason))
-    elif sys.platform == "darwin" and touchid_bin():
-        p = subprocess.Popen(touchid_bin() + [reason], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-    else:
-        out.put(("computer", "unavailable"))
-        return
-    procs.append(p)
-    res = (p.communicate()[0] or "").strip().splitlines()
-    res = res[-1] if res else "unavailable"
-    if res == "Verified":
-        out.put(("computer", "yes"))
-    elif res.startswith("unavailable") or p.returncode not in (0, None):
-        out.put(("computer", "unavailable"))
-    else:  # Canceled, RetriesExhausted, DeviceBusy...
-        out.put(("computer", "no"))
+def local_label():
+    a = local_auth.for_taps()
+    return a.label if a else "a check on this computer"
+
+
+def _local_ask(reason, out, procs, timeout=300):
+    a = local_auth.for_taps()
+    out.put(("computer", a.ask(reason, timeout, procs) if a else "unavailable"))
 
 
 # ---------- on the phone (phone_server.py over Tailscale) ----------
@@ -327,9 +292,10 @@ def allow_automatic(names, who=None):
 
 def needs_tap(names):
     """Which of these keys need a tap on the phone: all of them in phone mode, otherwise the protected ones.
-    With no phone set up (and no Touch ID), a tap can't happen, so they're asked for in the chat instead."""
+    With no phone set up (and no Touch ID, or approver you turned on), a tap can't happen, so they're asked for
+    in the chat instead."""
     mode, protected, _ = settings()
-    if not phone_config() and sys.platform != "darwin":
+    if not phone_config() and sys.platform != "darwin" and not local_auth.chosen():
         return []
     return list(names) if mode == "phone" else [n for n in names if n in protected]
 
@@ -436,6 +402,11 @@ def ask(names, what, minutes=60, timeout=300, force=False):
     if rest and mode == "chat" and not force:  # keys in 1Password: unlocking 1Password is the approval
         unlocked = _unlock_1password(rest, what, who, minutes)
         rest = [n for n in rest if n not in unlocked]
+    if rest and mode == "chat" and not force:  # Touch ID (or your own approver), if you turned it on
+        local, denied = _local_approve(rest, what, who, minutes)
+        if denied:
+            return False
+        rest = [n for n in rest if n not in local]
     if rest:  # ask in the chat: the message hook grants these when the person replies approve
         add_pending(rest, what, who)
         print(f"keys: {', '.join(rest)} needs your OK. Ask the person: \"I need {', '.join(rest)}. Reason: {what}. "
@@ -448,11 +419,11 @@ def ask(names, what, minutes=60, timeout=300, force=False):
     need = tap
     reason =f"{', '.join(need)} for: {what}"[:300] + f" (on {socket.gethostname()})"
     out, stop, procs, rids = queue.Queue(), threading.Event(), [], []
-    threads = [threading.Thread(target=_local_ask, args=(reason, out, procs), daemon=True),
+    threads = [threading.Thread(target=_local_ask, args=(reason, out, procs, timeout), daemon=True),
                threading.Thread(target=_phone_ask, args=(reason, out, stop, timeout, rids), daemon=True)]
     for t in threads:
         t.start()
-    where = "Windows Hello" if os.name == "nt" else "Touch ID"
+    where = local_label()
     print(f"keys: waiting for approval of {', '.join(need)} ({'your phone, or ' if phone_config() else ''}"
           f"{where} on this computer)...", file=sys.stderr)
     answers, ans, src = {}, None, "computer"
@@ -485,6 +456,33 @@ def ask(names, what, minutes=60, timeout=300, force=False):
     else:
         print(f"keys: denied on the {src}.", file=sys.stderr)
     return False
+
+
+def _local_approve(names, what, who, minutes):
+    """With a local approver turned on (keys touchid on), ask it first. Returns (approved names, denied).
+    A tap approves. Cancel is a no. If it can't ask, or nobody answers in time, the chat asks instead."""
+    a = local_auth.enabled()
+    if not a:
+        return [], False
+    wait = local_auth.timeout()
+    print(f"keys: approve {', '.join(names)} with {a.label} on this computer (the chat asks instead after "
+          f"{wait:g} seconds)...", file=sys.stderr)
+    reason = f"use {', '.join(names)} for: {what}"[:300]
+    ans = a.ask(reason, wait)
+    if ans == "yes":
+        _set(names, time.time() + minutes * 60, who)
+        print(f"keys: {', '.join(names)} approved with {a.label} for {span(minutes)}.", file=sys.stderr)
+        log_use(names, what, f"approved with {a.label} for {span(minutes)} ({who})")
+        return list(names), False
+    if ans == "no":
+        print(f"keys: {', '.join(names)} denied with {a.label}. Tell the person it was denied. They can still "
+              f"approve in the chat with: approve {' '.join(names)}", file=sys.stderr)
+        log_use(names, what, f"denied with {a.label} ({who})")
+        return [], True
+    why = "nobody answered" if ans == "timeout" else "it isn't available"
+    print(f"keys: {a.label} didn't approve ({why}). Asking in the chat instead.", file=sys.stderr)
+    log_use(names, what, f"{a.label}: {why}, asked in the chat ({who})")
+    return [], False
 
 
 def _unlock_1password(names, what, who, minutes):
