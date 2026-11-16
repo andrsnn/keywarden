@@ -116,9 +116,15 @@ def mac_helper_test():
         return
     b.write_bytes(Path(os.environ["KEYWARDEN_TOUCHID_BIN"]).read_bytes())
     b.chmod(0o755)
-    _, out = keys("touchid")
+    real = {k: v for k, v in env.items() if k != "AGENT_KEYS_NO_BIOMETRICS"}
+    r = subprocess.run([sys.executable, str(HERE / "keys.py"), "touchid"], capture_output=True, text=True, env=real,
+                       timeout=60)
+    out = r.stdout + r.stderr
     expect("the real Touch ID helper answers --check", "Touch ID: " in out)
     print("Touch ID on this Mac: " + out.strip().splitlines()[-1])
+    r = subprocess.run([sys.executable, str(HERE / "keys.py"), "touchid"], capture_output=True, text=True,
+                       env=dict(real, AGENT_KEYS_NO_BIOMETRICS="1"), timeout=60)
+    expect("AGENT_KEYS_NO_BIOMETRICS turns the helper off", "turned off by AGENT_KEYS_NO_BIOMETRICS" in r.stdout)
     b.unlink()
 
 

@@ -5,6 +5,8 @@ instead: `keys touchid use command -- PROGRAM ARGS`. keywarden runs it with the 
 reads the last line it prints: "Verified" approves, "unavailable ..." means it can't ask right now, "Timeout"
 means nobody answered, and anything else is a no. Run with --check, it prints "available" or "unavailable why".
 A Python module can add an approver with register(name, approver).
+AGENT_KEYS_NO_BIOMETRICS=1 turns the built-in Touch ID and Windows Hello prompts off, as the test suite does.
+It only takes away a way to approve.
 
 Chat approvals use an approver only after you turn it on with `keys touchid on`. It is off by default.
 Phone mode and protected keys already use the platform's approver alongside the phone.
@@ -24,6 +26,10 @@ from pathlib import Path
 STATE = Path(os.environ.get("AGENT_KEYS_STATE") or Path.home() / ".agent-keys")
 HERE = Path(__file__).resolve().parent
 DEFAULT_TIMEOUT = 60  # seconds to wait for a tap before asking in the chat instead
+
+
+def biometrics_off():
+    return bool(os.environ.get("AGENT_KEYS_NO_BIOMETRICS"))
 
 POWERSHELL = (os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0",
                            "powershell.exe") if os.name == "nt" else "powershell")
@@ -120,7 +126,7 @@ class TouchID(Program):
     label = "Touch ID"
 
     def argv(self):
-        if sys.platform != "darwin":
+        if sys.platform != "darwin" or biometrics_off():
             return None
         b = STATE / "touchid"
         if b.exists():
@@ -128,6 +134,8 @@ class TouchID(Program):
         return ["swift", str(HERE / "touchid.swift")] if shutil.which("swift") else None
 
     def missing(self):
+        if biometrics_off():
+            return "unavailable: turned off by AGENT_KEYS_NO_BIOMETRICS"
         if sys.platform != "darwin":
             return "unavailable: Touch ID is only on a Mac"
         return "unavailable: install Xcode command line tools (xcode-select --install), then rerun install.py"
@@ -137,11 +145,13 @@ class WindowsHello(Program):
     label = "Windows Hello"
 
     def argv(self):
-        if os.name != "nt":
+        if os.name != "nt" or biometrics_off():
             return None
         return [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", WIN_HELLO]
 
     def missing(self):
+        if biometrics_off():
+            return "unavailable: turned off by AGENT_KEYS_NO_BIOMETRICS"
         return "unavailable: Windows Hello is only on Windows"
 
     def args(self, reason):
