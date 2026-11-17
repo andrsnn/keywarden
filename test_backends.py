@@ -81,6 +81,13 @@ def main():
         expect("setup local", code == 0 and "Keys are stored in" in out)
         keys("add", "K_ONE", stdin="value-one-1234567890abc")
         expect("save to the computer's store", "K_ONE" in keys("list")[1])
+        block = "-----BEGIN PRIVATE KEY-----\nQ8r5T7u2i9o4P6s3a0D1f8G7\n-----END PRIVATE KEY-----"
+        try:
+            local_store.save("K_BLOCK", block)
+            expect("a value with line breaks comes back whole", local_store.read("K_BLOCK") == block)
+        except OSError as e:
+            expect(f"a value with line breaks saves ({e})", False)
+        local_store.delete("K_BLOCK")
 
         keys("approvals", "phone")  # every key needs a tap from here on in this test
         code, out = keys("switch", "1password")

@@ -3,6 +3,7 @@
 Every function takes `ns`, a namespace, so the saved keys ("agent-keys") and the short-lived copies made while
 an approval lasts ("agent-keys-cache") never mix. AGENT_KEYS_NS changes the default, which the tests use.
 """
+import base64
 import json
 import os
 import subprocess
@@ -104,11 +105,17 @@ if os.name == "nt":
         return {n for n in found if "#" not in n}
 
 elif sys.platform == "darwin":
+    MULTILINE = "keywarden-multiline:"
+
     def _sec(*args, input=None):
         return subprocess.run(["security", *args], input=input, capture_output=True, text=True)
 
     def save(name, value, ns=None):
         ns = ns or NS
+        # `security -i` reads one command per line, so a value with line breaks (a private key block) is stored
+        # base64-encoded behind a marker, and read() decodes it.
+        if "\n" in value or "\r" in value:
+            value = MULTILINE + base64.b64encode(value.encode()).decode()
         # `security -i` reads the command from stdin, so the key never shows up in the process list.
         quoted = '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
         r = _sec("-i", input=f"add-generic-password -U -s {ns} -a {name} -w {quoted}\n")
@@ -118,7 +125,10 @@ elif sys.platform == "darwin":
 
     def read(name, ns=None):
         r = _sec("find-generic-password", "-s", ns or NS, "-a", name, "-w")
-        return r.stdout.rstrip("\n") if r.returncode == 0 else None
+        if r.returncode != 0:
+            return None
+        value = r.stdout.rstrip("\n")
+        return base64.b64decode(value[len(MULTILINE):]).decode() if value.startswith(MULTILINE) else value
 
     def delete(name, ns=None):
         ns = ns or NS
