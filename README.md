@@ -9,6 +9,7 @@ Coding agents can scatter API keys across files and chat history—or reach for 
 - 🔁 **One store, both agents.** Save a key with Claude, use it from Codex—or the other way around. Each thread gets its own approval.
 - 🌙 **Set boundaries before an overnight run.** Tell Nightshift which keys the task needs and how long it may use them. Other saved keys stay unavailable until approved.
 - 🧵 **Approve once for the whole thread.** Subagents and subprocesses share the approved keys and expiry.
+- 👆 **Approve with Touch ID.** Optional on a Mac: `keys touchid on` turns a key request into a fingerprint tap instead of a chat reply. Windows Hello works the same way on Windows, or you can plug in your own approver. [How it works](#approve-with-touch-id-optional).
 - ⏳ **Access expires.** Long context, compaction, and resuming a thread do not renew an expired approval.
 - 🔐 **Encrypted storage.** macOS Keychain or Windows Credential Manager, with optional 1Password support.
 - 🧹 **Fewer plaintext copies.** Saved-name references, output filtering, and best-effort local transcript cleanup.
@@ -60,6 +61,8 @@ cd keywarden
 python3 install.py
 keys setup local
 ```
+
+On a Mac, run `keys touchid on` too if you'd rather approve keys with Touch ID than by replying in the chat.
 
 Restart your agent. In **Codex**, review and trust keywarden in `/hooks`, or **Settings > Hooks** on desktop. If the installer changes your PATH, open a new terminal before setup. On Windows, use `python` if `python3` isn't available.
 
