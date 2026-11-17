@@ -118,6 +118,35 @@ try:
     expect("the rewritten message passes the settings hook", '"block"' not in say(out["text"]))
     out = json.loads(run("prompt_hook.py", "--rewrite", stdin=json.dumps({"prompt": "fix the bug in a.ts"}))[1])
     expect("rewrite leaves a message with no key alone", out == {"text": "fix the bug in a.ts", "saved": []})
+
+    # A key file attached with @. Claude Code reads the file before any prompt hook runs. A throwaway key made now.
+    import base64
+    pem = ("-----BEGIN PRIVATE KEY-----\n" + "\n".join(base64.b64encode(os.urandom(48)).decode() for _ in range(3))
+           + "\n-----END PRIVATE KEY-----\n")
+    body = pem.splitlines()[1]
+    upload = tmp / ".claude" / "uploads" / "S1" / "a1b2c3d4-AuthKey_TEST123.p8"
+    upload.parent.mkdir(parents=True)
+    upload.write_text(pem)
+    msg = f'@"{upload}" add this to the release config'
+    out = say(msg)
+    expect("the settings hook stops a message with an attached key file", '"block"' in out
+           and "AUTHKEY_TEST123" in out and body not in out)
+    expect("the uploaded copy of the key file is deleted", not upload.exists())
+    expect("the attached key is saved under the file's name", "AUTHKEY_TEST123" in run("keys.py", "list")[1])
+    upload.write_text(pem)
+    out = json.loads(run("prompt_hook.py", "--rewrite", stdin=json.dumps({"prompt": msg}))[1])
+    expect("rewrite swaps the attached key file for the key's name",
+           out.get("text") == "[AUTHKEY_TEST123] add this to the release config"
+           and out.get("saved") == [["AUTHKEY_TEST123", "already saved"]] and body not in json.dumps(out))
+    own = tmp / "deploy key.pem"
+    own.write_text("ssh deploy key\n" + pem)
+    out = json.loads(run("prompt_hook.py", "--rewrite", stdin=json.dumps(
+        {"prompt": 'check @"deploy key.pem"#L1-3', "cwd": str(tmp)}))[1])
+    expect("a relative mention of the person's own key file is replaced, and the file is kept",
+           out.get("text") == "check [AUTHKEY_TEST123]" and own.exists())
+    (tmp / "notes.txt").write_text("-----BEGIN PRIVATE KEY-----\nshort\n-----END PRIVATE KEY-----\n")
+    out = json.loads(run("prompt_hook.py", "--rewrite", stdin=json.dumps({"prompt": "fix @notes.txt", "cwd": str(tmp)}))[1])
+    expect("an attached file with no real key is left alone", out == {"text": "fix @notes.txt", "saved": []})
 finally:
     sys.path.insert(0, str(HERE))
     os.environ.update(AGENT_KEYS_NS="agent-keys-chattest", AGENT_KEYS_STATE=str(tmp))

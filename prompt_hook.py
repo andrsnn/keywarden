@@ -148,12 +148,55 @@ def privacy_notice(data, agent):
     return PRIVACY_NOTE
 
 
-def replacement_plan(text, found, results):
+# An @-mention attaches a file. Claude Code reads it before any prompt hook runs and sends it with the message.
+MENTION = re.compile(r'(?<!\S)@(?:"([^"\n]+)"(?:#L\d+(?:-\d+)?)?|([^\s"]+))')
+
+
+def attached_keys(text, cwd=""):
+    """Keys in files the message attaches with @: [((start, end), path, [(NAME, value, named)])].
+
+    Looks for private key blocks and the well-known formats. A private key block is named after its file."""
+    import keys
+    out = []
+    for m in MENTION.finditer(text):
+        raw = re.sub(r"#L\d+(?:-\d+)?$", "", m.group(1) or m.group(2))
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = Path(cwd or ".") / path
+        try:
+            if not path.is_file() or path.stat().st_size > 1_000_000:
+                continue
+            body = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        stem = re.sub(r"^[0-9a-f]{8}-", "", path.stem)  # Claude's uploads folder puts 8 hex digits before the name
+        stem = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_").upper()
+        name = stem if re.match(r"[A-Z]", stem) else "PRIVATE_KEY"
+        found = [(name, keys.pem_value(b.group(0)), False) for b in keys.PEM.finditer(body) if keys.real_pem(b.group(0))]
+        found += [(keys.PATTERNS[int(k.lastgroup[1:])][0], k.group(0), False)
+                  for k in keys.KNOWN.finditer(body) if keys.plausible(k.group(0))]
+        if found:
+            out.append((m.span(), path, found))
+    return out
+
+
+def drop_upload(path):
+    """Delete Claude's own copy of an uploaded file, so sending the message again can't attach the key."""
+    parts = [p.lower() for p in path.parts]
+    if any(a == ".claude" and b == "uploads" for a, b in zip(parts, parts[1:])):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def replacement_plan(text, found, results, spans=()):
     """Return sanitized text and UTF-16 ranges for literal replacement by the JavaScript plugin.
 
     Ranges contain no secret values. UTF-16 offsets match JavaScript string slicing, including emoji.
+    spans are (start, end, name) ranges to replace as well, such as an @-mention of a key file.
     """
-    matches = []
+    matches = list(spans)
     for (_, value, _), (name, _) in zip(found, results):
         start = 0
         while (at := text.find(value, start)) != -1:
@@ -176,14 +219,24 @@ def capture(data, agent):
     import approve
     import keys
     text = data.get("prompt") or ""
-    found = [] if text.lstrip().startswith(NOTICES) else keys.find_keys(text)
-    if not found:
+    notice_text = text.lstrip().startswith(NOTICES)
+    found = [] if notice_text else keys.find_keys(text)
+    attached = [] if notice_text else attached_keys(text, data.get("cwd") or "")
+    if not found and not attached:
         return {"text": text, "saved": []}
     results = keys.save_found(found, text, data.get("cwd") or "", agent=agent)
-    text, edits = replacement_plan(text, found, results)
-    if keys.find_keys(text):
+    spans, files = [], []
+    for (start, end), path, file_found in attached:
+        saved = keys.save_found(file_found, f"attached file {path.name}", data.get("cwd") or "", agent=agent)
+        results += saved
+        found += file_found
+        spans.append((start, end, saved[0][0]))
+        files.append(path.name)
+        drop_upload(path)
+    text, edits = replacement_plan(text, found, results, spans)
+    if keys.find_keys(text) or attached_keys(text, data.get("cwd") or ""):
         raise ValueError("a detected value remained after replacement")
-    names = [name for name, _ in results]
+    names = list(dict.fromkeys(name for name, _ in results))
     who = session_caller(data, agent)
     # Giving a thread a key approves its descendants too. Protected keys and phone mode still ask.
     approved = approve.grant_from_prompt(names, text, who)
@@ -205,13 +258,16 @@ def capture(data, agent):
                'Run keys status, then use "$NAME" in commands. ')
     if pending:
         context += f"{', '.join(pending)} has no new grant from this paste. Request approval with keys grant before use. "
+    if files:
+        context += (f"The person attached {', '.join(files)}, which held a key. keywarden took the file out of the "
+                    "message, so you did not see it. ")
     context += "Local transcript redaction is best-effort; do not claim that all copies were erased."
     try:
         scrub_later(data.get("transcript_path"), [v for _, v, _ in found])
     except Exception:
         pass
     return {"text": text, "edits": edits, "saved": [list(r) for r in results], "approved": approved,
-            "notice": notice, "context": context}
+            "notice": notice, "context": context, "files": files}
 
 
 def rewrite():
@@ -236,8 +292,20 @@ def main():
             sys.exit(0)  # Claude Code's own notices aren't the person typing, and their long IDs aren't keys
         import keys
         found = keys.find_keys(text)
+        attached = attached_keys(text, data.get("cwd") or "")
     except BaseException:
         sys.exit(0)  # never get in the way of a message because of a bug here
+    if attached:
+        # The app read the file before this hook ran, so the only way to keep the key out of the chat is to stop
+        # the message. Nothing from a stopped message reaches the model or the session log.
+        try:
+            out = capture(data, AGENT)
+        except BaseException:
+            block("keywarden couldn't finish saving the key in the attached file. Your message wasn't sent. "
+                  "Check keys setup.")
+        names = ", ".join(dict.fromkeys(name for name, _ in out["saved"]))
+        block(f"keywarden saved {names} from {', '.join(out['files'])}. Your message wasn't sent, so the key "
+              f"stays out of the chat. Send it again without the file and ask for {names} by name.")
     if found:
         try:
             out = capture(data, AGENT)

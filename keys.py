@@ -886,6 +886,20 @@ STOP = set("save store keep add put this it these that them my the a an is are h
            "to of in on new it's its me can you i here's use".split())
 
 
+PEM_LINE_NO = re.compile(r"(?m)^[ \t]*\d+(?:\t|→)")  # line numbers a file viewer puts in front of each line
+
+
+def pem_value(block):
+    """A private key block as saved: without the line numbers it has when it was shown by a file viewer."""
+    return PEM_LINE_NO.sub("", block).strip()
+
+
+def real_pem(block):
+    """True for a private key block with a real key in it, not a short stand-in from docs or tests."""
+    body = PEM_LINE_NO.sub("", block.split("KEY-----", 1)[-1].rsplit("-----END", 1)[0])
+    return len(re.sub(r"\\n|[^A-Za-z0-9+/]", "", body)) >= 64
+
+
 def _raw_ok(v):
     """A string that could be a key: letters and digits, not a name like R2_BUCKET, a path or a word."""
     return (any(c.isdigit() for c in v) and any(c.isalpha() for c in v) and not IDENT.match(v)
@@ -1065,15 +1079,25 @@ def log_files(hours):
 
 
 def scan(hours, generic):
-    found = {}  # value -> info
+    found = {}  # text as it appears in the log -> info. info["value"] is the key to save.
     for f in log_files(hours):
+        if f.suffix != ".jsonl":  # a private key block in a plain text file spans lines, so read it whole
+            try:
+                whole = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                whole = ""
+            for m in PEM.finditer(whole):
+                if real_pem(m.group(0)):
+                    info = found.setdefault(m.group(0), {"label": "PRIVATE_KEY", "files": set(), "typed": False,
+                                                         "when": "", "value": pem_value(m.group(0))})
+                    info["files"].add(f)
         try:
             fh = open(f, encoding="utf-8", errors="replace")
         except OSError:
             continue
         with fh:
             for raw in fh:
-                quick = PREFILTER.search(raw)
+                quick = PREFILTER.search(raw) or "PRIVATE KEY-----" in raw
                 maybe_typed = '"display"' in raw or ('"type":"user"' in raw and '"tool_result"' not in raw)
                 if not quick and not (generic and maybe_typed):
                     continue
@@ -1090,6 +1114,9 @@ def scan(hours, generic):
                     for m in KNOWN.finditer(t):
                         label = PATTERNS[int(m.lastgroup[1:])][0]
                         hits.append((label, m.group(0)))
+                    for m in PEM.finditer(t):
+                        if real_pem(m.group(0)):
+                            hits.append(("PRIVATE_KEY", m.group(0)))
                 if generic and typed:
                     spans = [m.span() for m in KNOWN.finditer(typed)]
                     for m in GENERIC.finditer(typed):
@@ -1097,10 +1124,12 @@ def scan(hours, generic):
                         if not inside and generic_ok(m.group(0)):
                             hits.append(("UNKNOWN_KEY", m.group(0)))
                 for label, v in hits:
-                    if not plausible(v):
+                    pem = PEM.fullmatch(v) is not None
+                    if not pem and not plausible(v):
                         continue
                     info = found.setdefault(v, {"label": label, "files": set(), "typed": False,
-                                                "when": str(obj.get("timestamp", "")) if isinstance(obj, dict) else ""})
+                                                "when": str(obj.get("timestamp", "")) if isinstance(obj, dict) else "",
+                                                "value": pem_value(v) if pem else v})
                     info["files"].add(f)
                     if typed and v in typed:
                         info["typed"] = True
@@ -1112,8 +1141,9 @@ def redact_file(f, repl):
         before = f.stat().st_size
         text = f.read_text(encoding="utf-8", errors="surrogateescape")
         new = text
-        for v, r in repl.items():
-            new = new.replace(v, r)
+        for v, r in repl.items():  # a key as written, and as written inside a JSON string (a block's line breaks)
+            for form in dict.fromkeys((v, json.dumps(v)[1:-1], json.dumps(v, ensure_ascii=False)[1:-1])):
+                new = new.replace(form, r)
         if new == text:
             return "clean"
         if f.stat().st_size != before:  # a live session wrote while we read; try again
@@ -1144,12 +1174,14 @@ def cmd_rescue(args):
     print(f"Found {len(found)} key(s) in Claude chat logs:")
     for v, info in sorted(found.items(), key=lambda kv: kv[1]["when"]):
         where = "you pasted it" if info["typed"] else "in tool output"
-        done = f" -> saved as {saved[fingerprint(v)]}" if fingerprint(v) in saved else ""
-        print(f"  {info['label']:<20} {mask(v):<16} {where}, {len(info['files'])} log file(s){done}")
+        fp = fingerprint(info["value"])
+        done = f" -> saved as {saved[fp]}" if fp in saved else ""
+        print(f"  {info['label']:<20} {mask(info['value']):<16} {where}, {len(info['files'])} log file(s){done}")
 
     if "--save" in args:
         names = existing_names()
-        for v, info in found.items():
+        for info in found.values():
+            v = info["value"]
             fp = fingerprint(v)
             if fp in saved or (info["label"] == "UNKNOWN_KEY" and not include_unknown):
                 continue
@@ -1165,12 +1197,13 @@ def cmd_rescue(args):
                                               f" ({'you pasted it' if info['typed'] else 'tool output'}, {when[:16]})")
             saved[fp] = name
             print(f"  saved {mask(v)} as {name}")
-        skipped = sum(1 for v, i in found.items() if i["label"] == "UNKNOWN_KEY" and fingerprint(v) not in saved)
+        skipped = sum(1 for i in found.values() if i["label"] == "UNKNOWN_KEY" and fingerprint(i["value"]) not in saved)
         if skipped:
             print(f"  {skipped} unrecognised key(s) not saved. Add --all to save them as UNKNOWN_KEY.")
 
     if "--redact" in args:
-        repl = {v: f"[key moved to keywarden: {saved[fingerprint(v)]}]" for v in found if fingerprint(v) in saved}
+        repl = {v: f"[key moved to keywarden: {saved[fingerprint(i['value'])]}]"
+                for v, i in found.items() if fingerprint(i["value"]) in saved}
         files = sorted({f for v in repl for f in found[v]["files"]})
         results = {}
         for f in files:

@@ -24,6 +24,7 @@ Use saved names such as `OPENAI_API_KEY`. Pass values through environment variab
 
 - Follow capture notices in a short normal reply, such as **“Saved NAME to keywarden. Approved for this thread (12 hours).”** Use the actual mode and duration. Do not quote hook names or implementation details.
 - Claude's plugin replaces detected values with names before forwarding. Codex and Claude's command-hook fallback continue with the original prompt, so the pasted value can reach the model and local history. Local cleanup is best-effort; do not claim every copy was erased.
+- A key file attached with `@` (a private key block or a known key format) is saved under the file's name and kept out of the chat. Use the saved name; don't read the file.
 - If a pasted value was not detected, don't put it into another logged tool call to save it. Ask the person to run `keys add NAME --clipboard` in their terminal. This also avoids pasting values into chat entirely.
 - Check names provided at session start or run `keys list` / `keys status`. Don't ask for a value already saved.
 - Hooked Bash and PowerShell commands receive approved keys through environment variables: `"$OPENAI_API_KEY"` or `$env:OPENAI_API_KEY`. Code should read from the environment, such as `os.environ["OPENAI_API_KEY"]`.

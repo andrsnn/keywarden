@@ -108,6 +108,8 @@ This is hook-enforced **thread binding**, not OS process isolation. Programs run
 
 **Pasting has limits.** Claude's plugin replaces detected values before forwarding to the model. Codex and Claude without the plugin continue with the original prompt, so the initial paste can reach the model and local history. Redaction cannot erase in-memory context, provider copies, backups, or every local log. Use `keys add NAME --clipboard` to avoid pasting values into chat.
 
+**Attached key files.** When you attach a file with `@` and it holds a private key block or a key in a known format, keywarden saves the key under the file's name and keeps the file out of the chat. With Claude's plugin, the message goes on with `[NAME]` in place of the file. Without the plugin, the message is stopped, because Claude Code reads the file before any hook runs. keywarden also deletes Claude's copy of an uploaded file, but leaves your own files alone.
+
 ## Supported backends and optional controls
 
 | Backend / layer | Purpose | Status |
@@ -159,7 +161,7 @@ keywarden runs the program with the request as its last argument and the timeout
 | `keys run NAME -- command` | Pass selected keys to a program under the configured approval policy. |
 | `keys rename OLD NEW` / `keys remove NAME` | Rename or delete through the configured approval policy. |
 | `keys switch 1password` / `keys switch local` | Copy keys to another store and select it. Old copies remain. |
-| `keys rescue --save --redact` | Save recognized keys and scrub Claude's local logs; does not search Codex logs. |
+| `keys rescue --save --redact` | Save recognized keys, including private key blocks, and scrub Claude's local logs; does not search Codex logs. |
 
 Access requests and grants are recorded in `~/.agent-keys/use.log`. Non-strict 1Password reads use OS-store cache copies while grants are active. Enabling approval clears automatic grants and cached copies.
 

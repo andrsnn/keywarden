@@ -1,5 +1,6 @@
 """Transcript cleanup checks: same-length writes, JSON escaping, live appends, and late creation."""
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -77,6 +78,41 @@ class ScrubTests(unittest.TestCase):
             finally:
                 process.terminate()
                 process.wait(timeout=5)
+
+    def test_rescue_finds_and_redacts_a_private_key_block(self):
+        # A throwaway key made now. Claude Code logs an attached file as is, and a file viewer's copy with line numbers.
+        import base64
+        import contextlib
+        import io
+        from unittest.mock import patch
+        lines = [base64.b64encode(os.urandom(48)).decode() for _ in range(3)]
+        pem = "\n".join(["-----BEGIN PRIVATE KEY-----", *lines, "-----END PRIVATE KEY-----"])
+        numbered = "\n".join(f"{i:>6}\t{line}" for i, line in enumerate(pem.splitlines(), 1))
+        stand_in = "-----BEGIN RSA PRIVATE KEY-----\nabc123\n-----END RSA PRIVATE KEY-----"
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            log = home / ".claude" / "projects" / "p" / "s.jsonl"
+            log.parent.mkdir(parents=True)
+            rows = [{"type": "attachment", "attachment": {"content": {"file": {"content": pem + "\n"}}}},
+                    {"type": "user", "message": {"content": [{"type": "tool_result", "content": numbered}]}},
+                    {"type": "user", "message": {"content": "keep " + stand_in}}]
+            log.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            saved = home / "saved.json"
+            saved.write_text(json.dumps({keys.fingerprint(pem): "TEST_PRIVATE_KEY"}))
+            found = None
+            with patch.object(keys, "HOME", home), patch.object(keys, "SAVED", saved):
+                found = keys.scan(0, generic=False)
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    keys.cmd_rescue(["--hours", "0", "--redact"])
+            self.assertEqual({i["value"] for i in found.values()}, {pem})
+            self.assertIn("saved as TEST_PRIVATE_KEY", out.getvalue())
+            self.assertNotIn(lines[0], out.getvalue())
+            text = log.read_text()
+            for line in lines:
+                self.assertNotIn(line, text)
+            after = [json.loads(line) for line in text.splitlines()]
+            self.assertIn("[key moved to keywarden: TEST_PRIVATE_KEY]", json.dumps(after))
+            self.assertEqual(after[2], rows[2])
 
 
 if __name__ == "__main__":
