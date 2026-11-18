@@ -58,6 +58,7 @@ ALLOW = [
     ("Read", {"file_path": "/proj/.env.tpl"}),
     ("Bash", {"command": "node upload.mjs --env-file ~/.secrets/cloudflare-r2.env"}),
     ("Bash", {"command": "keys import ~/.secrets/cloudflare-r2.env"}),
+    ("Bash", {"command": "keys import \"C:/Users/me/app/.env.local\" --only SENTRY_AUTH_TOKEN"}),
     ("Read", {"file_path": "/proj/src/environment.ts"}),
     ("Read", {"file_path": "/proj/src/env.ts"}),
     ("Read", {"file_path": "/proj/.environment/readme.md"}),

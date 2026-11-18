@@ -12,7 +12,9 @@ Use saved names such as `OPENAI_API_KEY`. Pass values through environment variab
 - **Approvals are on by default.** Each Claude Code or Codex thread approves specific key names. Its subagents and subprocesses share that approved set and expiry. Another thread needs separate approval, even though both agents use the same store.
 - A key supplied directly to the thread is saved and approved for 12 hours by default. Confirm the actual capture notice briefly, then continue. Protected keys and phone mode retain their extra checks.
 - Users can preapprove saved names on a separate line: `You'll need these keys: OPENAI_API_KEY, GITHUB_TOKEN for 8h` or `approve OPENAI_API_KEY GITHUB_TOKEN for 8h`. The prompt hook records this consent; no second approval reply is needed. Without a duration, named consent lasts one hour. A named approval with a new duration sets its new expiry.
-- Use `keys status` to check current access. For an unapproved key, run `keys grant NAME --for "what you're doing"`. If it requests chat approval, ask: **“Use NAME for this task? Reply approve, approve 30m, approve 2h, or no.”** End your turn and retry after approval. Stop using the key if denied.
+- Use `keys status` to check current access. For an unapproved key, run `keys grant NAME --for "what you're doing"`. If it requests chat approval, ask: **“Use NAME for this task? Reply approve, approve 30m, approve 2h, or no.”** End your turn and retry after approval. Stop using the key if denied. Any short reply with the word approve in it counts, like "It's on disk approve" or "approve 1h please", unless it also says no, as in "don't approve".
+- If the name isn't saved, `keys grant NAME` and `keys run NAME` look for it in .env files on disk: the current folder, your home folder, `~/dev`, `C:/dev` and the top folder of every other drive, plus the folders directly inside each of those. When it finds the key, it saves it, says which file it came from, and asks for approval as usual. It never prints the value. If it can't find the key, ask the person which file it's in, then run `keys import FILE --only NAME`.
+- Don't read a .env file to find a key. The hook stops it and tells you the `keys import FILE --only NAME` command to run instead.
 - A subagent can request an additional key; the user answers in the parent thread. That approval covers the thread and its other helpers too.
 - Long context, compaction, and resume do not renew grants. For Nightshift or other overnight work, ask for the named keys and duration up front. When an additional key or renewed access is needed, ask before continuing work that requires it. Do not treat remembering a key name or an old approval message as current permission.
 - `keys lock` from the thread or a subagent clears the whole thread's grants. The developer's terminal can clear everyone's. Expired or locked grants do not remove credentials already received by running processes.
@@ -39,7 +41,7 @@ Pipe values directly into storage instead of printing them:
 
 `curl -s ... | python -c "import json,sys; print(json.load(sys.stdin)['token'])" | keys add NEW_TOKEN`
 
-Other inputs: `keys add NAME --from-env VAR`, `keys import FILE.env`. Use `keys note NAME "what it is"` for context. Don't create plaintext key files in the repository.
+Other inputs: `keys add NAME --from-env VAR`, `keys import FILE.env` (every line), `keys import FILE.env --only NAME1,NAME2` (only those names). If a different value is already saved under a name, keywarden keeps it unless you add `--replace`. Use `keys note NAME "what it is"` for context. Don't create plaintext key files in the repository.
 
 ## Boundaries
 

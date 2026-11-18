@@ -14,8 +14,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 APPROVE = re.compile(r"(?i)^\s*(?:approve[sd]?|yes|yep|yeah|y|ok|okay|allow|allowed|sure|go ahead|do it|grant)\b")
-APPROVE_WORD = re.compile(r"(?i)^\s*approve[sd]?\b")
 DENY = re.compile(r"(?i)^\s*(?:no|nope|deny|denied|don'?t|stop)\b")
+# The word approve anywhere in a short reply answers a waiting request ("It's on disk approve", "approve 1h please"),
+# unless the reply also says no. A no next to approve, or deny or reject, turns it down. Any other no leaves it alone.
+APPROVE_ANY = re.compile(r"(?i)\bapprove[sd]?\b")
+DENY_ANY = re.compile(r"(?i)\b(?:(?:don['’]?t|do\s+not|not|never|no)\s+approve[sd]?|deny|denied|reject(?:ed)?|refuse[sd]?)\b")
+NEGATION = re.compile(r"(?i)\b(?:no|not|nope|never|don['’]?t|do\s+not|stop|wait|cancel)\b")
 NOTICES = ("<task-notification", "<system-reminder", "<command-", "<local-command", "<bash-", "<user-memory",
            "Another Claude session", "[SYSTEM NOTIFICATION")
 TIME = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\b")
@@ -48,6 +52,19 @@ def tell_agent(text, notice=None):
         out["systemMessage"] = notice
     print(json.dumps(out))
     sys.exit(0)
+
+
+def answer_in(text):
+    """True if a reply approves a waiting request, False if it turns it down, None if it does neither."""
+    if len(text) > 200:
+        return None
+    if DENY_ANY.search(text) or len(text) <= 80 and DENY.match(text):
+        return False
+    if APPROVE_ANY.search(text):
+        return None if NEGATION.search(text) else True
+    if len(text) <= 80 and APPROVE.match(text):
+        return True
+    return None
 
 
 def minutes_in(text):
@@ -324,16 +341,17 @@ def main():
             tell_agent(named)
         # The word approve (or no) answers a request from up to 12 hours ago. A loose yes or ok only
         # answers one from the last 30 minutes, so it can't grant an old request by accident.
-        window = approve.APPROVE_WORD_MINUTES if APPROVE_WORD.match(text) or DENY.match(text) else approve.PENDING_MINUTES
+        answer = answer_in(text)
+        window = approve.APPROVE_WORD_MINUTES if APPROVE_ANY.search(text) or answer is False else approve.PENDING_MINUTES
         session = session_caller(data, AGENT) if data.get("session_id") else None
-        if len(text) <= 80 and approve.pending(window, session):
-            if APPROVE.match(text):
+        if answer is not None and approve.pending(window, session):
+            if answer:
                 minutes = minutes_in(text)
                 names = approve.answer_pending(True, minutes, window, session)
                 span = approve.span(minutes or approve.settings()[2])
                 tell_agent(f"keywarden: the person approved {', '.join(names)} for {span}. "
                             "Run the command that asked for it again.")
-            if DENY.match(text):
+            else:
                 names = approve.answer_pending(False, max_age=window, session=session)
                 tell_agent(f"keywarden: the person said no to {', '.join(names)}. Don't ask again.")
     except SystemExit:

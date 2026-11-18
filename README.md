@@ -157,7 +157,9 @@ keywarden runs the program with the request as its last argument and the timeout
 | `keys lock [NAME ...]` | Revoke future loading for this thread and its helpers; from your terminal, revoke for all threads. |
 | `keys note NAME "description"` | Tell agents what a key is for. |
 | `keys add NAME --clipboard` | Save a copied key without pasting into chat. |
-| `keys import FILE.env` | Save keys from an existing file. |
+| `keys import FILE.env` | Save every key in an existing file. |
+| `keys import FILE.env --only NAME1,NAME2` | Save only those keys from the file. If a different value is already saved under a name, keywarden keeps it unless you add `--replace`. |
+| `keys grant NAME --for "why"` | Ask for a key. If NAME isn't saved, keywarden looks for it in .env files on disk, saves it and says which file it came from. Set `AGENT_KEYS_ENV_DIRS` to choose the folders it looks in. |
 | `keys run NAME -- command` | Pass selected keys to a program under the configured approval policy. |
 | `keys rename OLD NEW` / `keys remove NAME` | Rename or delete through the configured approval policy. |
 | `keys switch 1password` / `keys switch local` | Copy keys to another store and select it. Old copies remain. |

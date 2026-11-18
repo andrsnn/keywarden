@@ -15,14 +15,14 @@
   keys phone                        approve key use from your phone (then: keys phone test)
   keys add NAME [--clipboard | --from-env VAR] [--note "what it is"]
                                     save a key (from the clipboard, a variable, a pipe, or typed hidden)
-  keys import FILE.env              save every NAME=value line of a .env file
+  keys import FILE.env [--only A,B] save the NAME=value lines of a .env file (only A and B with --only)
   keys list                         list saved keys: what each is, when and where it was saved
   keys note NAME "what it is"       add a note to a key, shown in keys list and to each new agent session
   keys rename OLD NEW               rename a saved key
   keys remove NAME                  delete a saved key
   keys ref NAME                     print the line for a .env.tpl file
   keys run NAME [VAR=NAME] -- CMD   run CMD with those keys set as environment variables
-  keys grant --for WHY              ask for approval; you pick how long on your phone
+  keys grant NAME --for WHY         ask for approval; a NAME that isn't saved is looked for in .env files
   keys status                       how long the current approval lasts
   keys lock                         end the current approval now
   keys rescue [--save] [--redact]   find keys pasted into Claude chat logs, save them, scrub the logs
@@ -345,22 +345,131 @@ def cmd_add(args):
     print(f"Saved {name} ({mask(value)}).")
 
 
+def env_pairs(path):
+    """(NAME, value) for each NAME=value line of a .env file. Lines that point at a key store are skipped."""
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        var, _, value = line.removeprefix("export ").partition("=")
+        value = value.strip().strip('"').strip("'")
+        name = re.sub(r"[^A-Za-z0-9_]", "_", var.strip()).upper()
+        if value and NAME_RE.match(name) and not value.startswith(("op://", "keys:")):
+            yield name, value
+
+
+# Files that look like .env files: .env, .env.local, .env.games.local, name.env, .dev.vars. Examples and backups
+# (.env.example, .env.local.bak) are skipped.
+ENV_FILE_NAME = re.compile(r"(?i)^(?:\.env(?:\.[\w-]+)*|[\w-]+\.env|\.dev\.vars)$")
+ENV_EXAMPLE = re.compile(r"(?i)\.(?:example|sample|template|tpl|bak[\w-]*|backup|old|orig)(?:\.|$)")
+SKIP_DIRS = {"node_modules", "appdata", "$recycle.bin", "system volume information", "windows", "program files",
+             "program files (x86)", "programdata", "__pycache__", "venv", ".venv", ".git"}
+
+
+def env_search_roots():
+    """Folders to look in for .env files, each with the folders directly inside it.
+
+    Set AGENT_KEYS_ENV_DIRS (folders split by the path separator) or "env_dirs" in config.json to choose your own.
+    """
+    own = os.environ.get("AGENT_KEYS_ENV_DIRS") or load_json(CONFIG, {}).get("env_dirs")
+    if own:
+        return [Path(p) for p in (own.split(os.pathsep) if isinstance(own, str) else own) if p]
+    roots = [Path.cwd(), HOME, HOME / ".secrets", HOME / "dev", HOME / "code", HOME / "src", HOME / "projects"]
+    if IS_WIN:
+        roots.append(Path("C:/dev"))
+        roots += [Path(f"{d}:/") for d in "DEFGHIJKLMNOPQRSTUVWXYZ" if os.path.isdir(f"{d}:/")]
+    return roots
+
+
+def env_files_on_disk(seconds=20):
+    """Every .env file in the search folders and one level below them. Stops after `seconds`."""
+    stop, seen, files = time.time() + seconds, set(), []
+
+    def look(folder):
+        key = os.path.normcase(str(folder))
+        if key in seen or time.time() > stop:
+            return []
+        seen.add(key)
+        subdirs = []
+        try:
+            with os.scandir(folder) as it:
+                for e in it:
+                    try:
+                        if e.is_file() and ENV_FILE_NAME.match(e.name) and not ENV_EXAMPLE.search(e.name):
+                            files.append(Path(e.path))
+                        elif (e.is_dir(follow_symlinks=False) and not e.name.startswith(".")
+                              and e.name.lower() not in SKIP_DIRS):
+                            subdirs.append(Path(e.path))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return subdirs
+
+    for root in env_search_roots():
+        for sub in look(root):
+            look(sub)
+    return files
+
+
+def find_on_disk(names):
+    """{NAME: [(path, value, modified time)]} for the names found in .env files on disk. Values are never printed."""
+    found = {}
+    for f in env_files_on_disk():
+        try:
+            pairs = list(env_pairs(f))
+            mtime = f.stat().st_mtime
+        except OSError:
+            continue
+        for name, value in pairs:
+            if name in names:
+                found.setdefault(name, []).append((f, value, mtime))
+    return found
+
+
+def import_from_disk(missing, names):
+    """Save keys an agent asked for that sit in a .env file on disk. Returns the names still missing."""
+    found = find_on_disk(set(missing))
+    for name in missing:
+        hits = sorted(found.get(name, []), key=lambda h: -h[2])
+        if not hits:
+            continue
+        path, value, _ = hits[0]
+        store(name, value, names=names, source=f"found in {path.resolve()} when an agent asked for it")
+        msg = f"keywarden: found {name} in {path} and saved it."
+        others = sorted({str(p) for p, v, _ in hits[1:] if v != value})
+        if others:
+            msg += (f" These files have a different {name}: {', '.join(others)}. keywarden used the one "
+                    f"changed most recently. To use another: keys import FILE --only {name} --replace")
+        print(msg, flush=True)
+    return [n for n in missing if n not in names]
+
+
+def not_found(missing):
+    where = ", ".join(str(r) for r in env_search_roots()[:6])
+    die(f"no saved key named {', '.join(missing)}, and it isn't in any .env file in {where} or the folders "
+        f"directly inside them. Run keys list to check the name. If the person knows which file it's in, run: "
+        f"keys import FILE --only {','.join(missing)}")
+
+
 def cmd_import(args):
-    """Save every NAME=value line of a .env file. Values are never printed."""
+    """Save the NAME=value lines of a .env file (all of them, or only the --only names). Values are never printed."""
+    only = None
+    if "--only" in args:
+        i = args.index("--only")
+        if i + 1 >= len(args):
+            die("usage: keys import FILE.env --only NAME1,NAME2")
+        only = {norm_name(n) for n in args[i + 1].split(",") if n.strip()}
+        args = args[:i] + args[i + 2:]
     files = [a for a in args if not a.startswith("--")]
     if not files:
-        die("usage: keys import FILE.env [FILE2.env ...] [--replace]")
-    names, saved, asked = existing_names(), load_json(SAVED, {}), False
+        die("usage: keys import FILE.env [FILE2.env ...] [--only NAME1,NAME2] [--replace]")
+    names, saved, seen = existing_names(), load_json(SAVED, {}), set()
     for path in files:
-        for line in Path(path).read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
+        for name, value in env_pairs(path):
+            if only is not None and name not in only:
                 continue
-            var, _, value = line.removeprefix("export ").partition("=")
-            value = value.strip().strip('"').strip("'")
-            if not value or value.startswith(("op://", "keys:")):
-                continue
-            name = norm_name(var)
+            seen.add(name)
             if saved.get(fingerprint(value)) == name and name in names:
                 print(f"  {name}: already saved")
             elif name in names and "--replace" not in args:
@@ -371,6 +480,8 @@ def cmd_import(args):
                 store(name, value, replace=True, names=names, source=f"imported from {Path(path).resolve()}")
                 saved[fingerprint(value)] = name
                 print(f"  {name}: saved ({mask(value)})")
+    for name in sorted((only or set()) - seen):
+        print(f"  {name}: not in {', '.join(files)}")
     print(f"To use them: keys run NAME -- <command>, or put the lines from keys ref NAME in a .env.tpl file.")
 
 
@@ -417,9 +528,10 @@ def cmd_grant(args):
     names = [norm_name(a) for i, a in enumerate(args) if not a.startswith("--") and (i == 0 or args[i - 1] != "--for")]
     if not names:
         die('name the keys you need, like: keys grant CLOUDFLARE_API_TOKEN R2_BUCKET --for "uploading the build"')
-    missing = [n for n in names if n not in existing_names()]
-    if missing:
-        die(f"no saved key named {', '.join(missing)}. Run: keys list")
+    saved = existing_names()
+    missing = [n for n in names if n not in saved]
+    if missing and import_from_disk(missing, saved):
+        not_found([n for n in missing if n not in saved])
     if not approve.ask(names, reason, minutes=grant_minutes()):
         sys.exit(1)
     cmd_status([])
@@ -785,6 +897,10 @@ def cmd_run(args):
             cmd = [found, *cmd[1:]]
     what = " ".join(args[i + 1:])
     minutes = grant_minutes()
+    saved = existing_names()
+    missing = sorted({n for n in wanted.values() if n not in saved})
+    if missing and import_from_disk(missing, saved):
+        not_found([n for n in missing if n not in saved])
 
     # Same path for both stores: approval first, then the values go into this one program's environment.
     if not approve.ask(sorted(set(wanted.values())), what, minutes):

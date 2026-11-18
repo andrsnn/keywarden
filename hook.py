@@ -118,6 +118,43 @@ def check(tool, inp):
     return None
 
 
+TOKEN = re.compile(r'"([^"]+)"|\'([^\']+)\'|([^\s;&|<>()]+)')
+VAR_NAME = re.compile(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b")
+
+
+def env_tip(tool, inp):
+    """When a .env read is stopped, say how to get the key from that file without reading it."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import keys
+    is_env = lambda p: keys.ENV_FILE_NAME.match(re.split(r"[\\/]", p.rstrip("\\/"))[-1] or "") and \
+        not keys.ENV_EXAMPLE.search(p)
+    if tool == "Read":
+        text, path = "", inp.get("file_path", "")
+    elif tool == "Grep":
+        text, path = inp.get("pattern", ""), inp.get("path", "")
+    elif tool in ("Bash", "PowerShell"):
+        text = inp.get("command", "")
+        tokens = ["".join(t) for t in TOKEN.findall(text)]
+        path = next((t for t in tokens if is_env(t)), "")
+    else:
+        return None
+    if not path or not is_env(path):
+        return None
+    names = [n for n in dict.fromkeys(VAR_NAME.findall(text.replace(path, " "))) if n != "AGENT_KEYS_CALLER"]
+    if names:
+        try:
+            saved = keys.existing_names()
+        except BaseException:
+            saved = set()
+        if all(n in saved for n in names):
+            return (f"{', '.join(names)} {'is' if len(names) == 1 else 'are'} already saved in keywarden. "
+                    f"Run: keys grant {' '.join(names)} --for \"what it's for\", then use \"${names[0]}\" in commands.")
+    only = ",".join(names) if names else "NAME"
+    return (f"To save a key from that file without reading it, run: keys import \"{path}\" --only {only}"
+            f"{'' if names else ' (NAME is the key you need)'}, then keys grant {only.replace(',', ' ')} --for "
+            "\"what it's for\". keys grant also looks for a key in .env files on its own when it isn't saved yet.")
+
+
 def check_patch(patch):
     """Check Codex's patch format using the same file and key rules as Claude edits."""
     sections = re.split(r"(?m)^\*\*\* (Add|Update|Delete) File: (.+)\n", patch)
@@ -150,9 +187,13 @@ def main():
             pass
         sys.exit(0)
     if why:
-        print(f"keywarden blocked this because it {why}. Key values stay out of the chat. "
+        try:
+            tip = env_tip(data.get("tool_name", ""), data.get("tool_input") or {})
+        except BaseException:
+            tip = None
+        print(f"keywarden blocked this because it {why}. Key values stay out of the chat. " + (tip or
               "To use a key, run the program with: keys run KEY_NAME -- <command>. "
-              "To see which keys exist: keys list.", file=sys.stderr)
+              "To see which keys exist: keys list."), file=sys.stderr)
         sys.exit(2)
     # While keys are approved, put every key in the command's environment, and send the command's output through
     # mask.py so a key value that gets printed (curl -v, env, a debug line) shows as <concealed by keywarden>.
