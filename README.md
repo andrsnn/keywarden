@@ -49,6 +49,8 @@ Agent: Use STRIPE_SECRET_KEY for this task?
 You: approve 30m
 ```
 
+Any clear yes works, in your own words: "ok, go ahead" or "sure, get it deployed". A clear no, like "no", "hold off" or "not that key", turns it down. A reply that doesn't answer, like a question, leaves the request waiting.
+
 **This helps with long context threads:** remembering that a key exists does not authorize its use. After compaction or resume, keywarden checks the current approval and expiry again. If an overnight task drifts into work needing another credential, it has to get your permission. This limits key access; it does not approve individual API calls or control how an approved key is used.
 
 ## Install once

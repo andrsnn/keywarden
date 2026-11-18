@@ -256,7 +256,7 @@ def span(minutes):
 
 def settings():
     """(mode, protected keys, minutes a grant lasts). mode is how a key without a grant gets one:
-    "chat" (the default): the agent asks you in the chat and you reply approve.
+    "chat" (the default): the agent asks you in the chat and you reply with any clear yes.
     "phone": every key needs a tap on your phone (keys approvals phone).
     "auto": granted at once with no question (keys approvals off)."""
     cfg = _load(STATE / "config.json", {})
@@ -410,7 +410,7 @@ def ask(names, what, minutes=60, timeout=300, force=False):
     if rest:  # ask in the chat: the message hook grants these when the person replies approve
         add_pending(rest, what, who)
         print(f"keys: {', '.join(rest)} needs your OK. Ask the person: \"I need {', '.join(rest)}. Reason: {what}. "
-              f"Reply approve, or approve 1h.\" Then end your turn, and run this command again after they "
+              f"Reply approve, or approve 1h. Any clear yes works.\" Then end your turn, and run this command again after they "
               "approve.", file=sys.stderr)
         log_use(rest, what, "asked in the chat")
         return False

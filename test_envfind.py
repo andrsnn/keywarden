@@ -37,6 +37,12 @@ def keys(*args):
     return run("keys.py", *args)
 
 
+OWNER_YES_1 = ("Okay, test that it actually fucking works. Like, run it, show me evidence that it runs, and show me "
+               "the actual output. I want to get a notification, ideally.")
+OWNER_YES_2 = ("Didn't we just solve this? Like I could say, if my intent is clear, I don't have to say approve verbatim, "
+               "subagent keyword and get this fixed in main, make sure it's deployed.")
+
+
 def say(text):
     return run("prompt_hook.py", stdin=json.dumps({"prompt": text}))[1]
 
@@ -65,7 +71,12 @@ try:
                        ("Approved", True), ("ok it's there now, approve 8h", True), ("approve", True), ("yes", True),
                        ("don't approve", False), ("do not approve that", False), ("no", False), ("deny", False),
                        ("I don't approve of this", False), ("approve it, no wait", None),
-                       ("what are you doing?", None), ("fix the bug in a.ts", None)]:
+                       ("what are you doing?", None), ("fix the bug in a.ts", None)] + [
+            # Any reply with a clear yes approves, with or without the word approve. These are the owner's own replies.
+            (OWNER_YES_1, True), (OWNER_YES_2, True), ("go ahead", True), ("sure", True), ("no problem, go ahead", True),
+            ("don't", False), ("wait", None), ("hold off", False), ("not that key", False), ("stop", False),
+            ("ok but not that key", False), ("Don't use that key", False), ("Didn't we just solve this?", None),
+            ("why do you need it?", None)]:
         expect(f"answer to {text!r} is {want}", answer_in(text) is want)
     expect("approve 1h please is 60 minutes", minutes_in("approve 1h please") == 60)
 
@@ -87,6 +98,17 @@ try:
     keys("grant", "SAVED_TEST_KEY", "--for", "the test")
     out = say("don't approve")
     expect("'don't approve' turns it down", "said no to SAVED_TEST_KEY" in out and "approved" not in out)
+    for reply in (OWNER_YES_1, OWNER_YES_2):
+        keys("lock")
+        keys("grant", "SAVED_TEST_KEY", "--for", "the test")
+        out = say(reply)
+        expect(f"{reply[:30]!r}... approves with no approve word needed", "approved SAVED_TEST_KEY" in out)
+    for reply in ("wait", "hold off", "not that key"):
+        keys("lock")
+        keys("grant", "SAVED_TEST_KEY", "--for", "the test")
+        out = say(reply)
+        expect(f"{reply!r} doesn't approve", "approved" not in out)
+        (state / "pending.json").unlink(missing_ok=True)
     (state / "pending.json").unlink(missing_ok=True)
 
     # F2: a name that isn't saved is found in a .env file on disk and saved without printing it.

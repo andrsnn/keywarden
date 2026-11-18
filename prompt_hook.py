@@ -13,13 +13,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-APPROVE = re.compile(r"(?i)^\s*(?:approve[sd]?|yes|yep|yeah|y|ok|okay|allow|allowed|sure|go ahead|do it|grant)\b")
-DENY = re.compile(r"(?i)^\s*(?:no|nope|deny|denied|don'?t|stop)\b")
-# The word approve anywhere in a short reply answers a waiting request ("It's on disk approve", "approve 1h please"),
-# unless the reply also says no. A no next to approve, or deny or reject, turns it down. Any other no leaves it alone.
+# A reply to a waiting key request approves it when its intent is a clear yes, in any words: "ok, test that
+# it works", "go ahead", "get this fixed and deploy it". A clear no turns it down. Anything unsure, or a reply
+# that never answers (a question, an unrelated task), leaves the request waiting.
+YES_START = re.compile(r"^\s*(?:approve[sd]?|yes|yep|yup|yeah|ya|y|ok|okay|k|kk|sure|fine|alright|all right|allow(?:ed)?"
+                       r"|grant(?:ed)?|go ahead|go for it|do it|sounds good)\b")
+GO_ON = re.compile(r"\b(?:approve[sd]?|yes|yep|yeah|sure|go ahead|go for it|do it|proceed|carry on|keep going|continue"
+                   r"|ship it|use (?:it|them|the keys?|that key)|you can use|you have (?:my )?(?:ok|okay|permission|approval)"
+                   r"|(?:get|have) (?:this|it|that|them) (?:fixed|done|working|deployed|shipped|running)"
+                   r"|make sure (?:it|this|that)|run it|test (?:it|that|this)|that'?s fine|fine by me)\b")
+NO_START = re.compile(r"^\s*(?:no|nope|nah|deny|denied|don't|do not|stop|cancel|never|not|hold off)\b")
+REFUSE = re.compile(r"\b(?:deny|denied|reject(?:ed)?|refuse[sd]?|hold off|no way|never ?mind|cancel"
+                    r"|not (?:that|this|those|these|yet|now|right now|for this)"
+                    r"|(?:don't|do not|didn't|never|not|no) (?:approve[sd]?|use|grant|give|allow|do (?:it|that)|touch|want|need))\b")
+UNSURE = re.compile(r"\b(?:no|not|nope|never|stop|wait|hold on|cancel|maybe|later)\b")
+FRIENDLY_NO = re.compile(r"\b(?:no problem|no worries|no prob|not a problem)\b")
+# The word approve anywhere in a reply lets it answer a request up to 12 hours old.
 APPROVE_ANY = re.compile(r"(?i)\bapprove[sd]?\b")
-DENY_ANY = re.compile(r"(?i)\b(?:(?:don['’]?t|do\s+not|not|never|no)\s+approve[sd]?|deny|denied|reject(?:ed)?|refuse[sd]?)\b")
-NEGATION = re.compile(r"(?i)\b(?:no|not|nope|never|don['’]?t|do\s+not|stop|wait|cancel)\b")
 NOTICES = ("<task-notification", "<system-reminder", "<command-", "<local-command", "<bash-", "<user-memory",
            "Another Claude session", "[SYSTEM NOTIFICATION")
 TIME = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\b")
@@ -56,13 +66,14 @@ def tell_agent(text, notice=None):
 
 def answer_in(text):
     """True if a reply approves a waiting request, False if it turns it down, None if it does neither."""
-    if len(text) > 200:
+    if len(text) > 400:
         return None
-    if DENY_ANY.search(text) or len(text) <= 80 and DENY.match(text):
+    t = FRIENDLY_NO.sub("fine", re.sub(r"\s+", " ", text.lower().replace("’", "'")))
+    if REFUSE.search(t) or NO_START.match(t):
         return False
-    if APPROVE_ANY.search(text):
-        return None if NEGATION.search(text) else True
-    if len(text) <= 80 and APPROVE.match(text):
+    if UNSURE.search(t):
+        return None
+    if YES_START.match(t) or GO_ON.search(t):
         return True
     return None
 
