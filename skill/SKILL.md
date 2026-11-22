@@ -9,7 +9,7 @@ Use saved names such as `OPENAI_API_KEY`. Pass values through environment variab
 
 ## Approval workflow
 
-- **What chat approval is for.** It is not a security check (anything that can type in the chat can type yes). It shows the person which keys each agent uses, and it makes access expire on long tasks. The real check is the second factor: Touch ID or Windows Hello (`keys touchid on`) or a phone tap (`keys approvals phone`); a TOTP code is planned. Never describe a chat yes as a security control, and suggest the second factor when the person wants keys locked down.
+- **What chat approval is for.** It is not a security check (anything that can type in the chat can type yes). It shows the person which keys each agent uses, and it makes access expire on long tasks. The real check is the second factor: Touch ID or Windows Hello (`keys touchid on`) a phone tap (`keys approvals phone`), or the 6-digit code from an authenticator app (`keys approvals totp`). Never describe a chat yes as a security control, and suggest the second factor when the person wants keys locked down.
 - Read a reply by its intent. Typos ("aprove", "apprve"), "GO" and angry or mixed messages that clearly mean yes all count as yes.
 
 - **Approvals are on by default.** Each Claude Code or Codex thread approves specific key names. Its subagents and subprocesses share that approved set and expiry. Another thread needs separate approval, even though both agents use the same store.
@@ -21,9 +21,10 @@ Use saved names such as `OPENAI_API_KEY`. Pass values through environment variab
 - A subagent can request an additional key; the user answers in the parent thread. That approval covers the thread and its other helpers too.
 - Long context, compaction, and resume do not renew grants. For Nightshift or other overnight work, ask for the named keys and duration up front. When an additional key or renewed access is needed, ask before continuing work that requires it. Do not treat remembering a key name or an old approval message as current permission.
 - `keys lock` from the thread or a subagent clears the whole thread's grants. The developer's terminal can clear everyone's. Expired or locked grants do not remove credentials already received by running processes.
+- **Authenticator codes (totp mode).** If `keys grant` says the key needs the code from the person's authenticator app, ask: **"I need NAME. Reason: ... Reply with the 6-digit code from your authenticator app."** End your turn and run the grant again after they reply. They can add a time, like `492017 2h`. A yes without a code doesn't approve in this mode, so don't treat one as approval; ask for the code. If the hook says the code was wrong or already used, tell the person and ask for the current code. Never ask for the authenticator secret, and never run `keys totp setup` or `keys totp test`: they only run in the person's own terminal.
 - With 1Password, `keys grant` may request an unlock first. Phone or protected-key policies may require a tap. Follow the configured route.
 
-`keys approvals on` (or `chat`) enables the default control; `keys approvals phone` enables phone/local biometric approval. Explicit `keys approvals off` settings are preserved. In that mode, ordinary keys work automatically across threads; do not ask for redundant chat approval or claim `keys lock` revokes automatic access. Change modes only when the user asks; follow required confirmation.
+`keys approvals on` (or `chat`) enables the default control; `keys approvals phone` enables phone/local biometric approval; `keys approvals totp` makes requests wait for an authenticator code. Explicit `keys approvals off` settings are preserved. In that mode, ordinary keys work automatically across threads; do not ask for redundant chat approval or claim `keys lock` revokes automatic access. Change modes only when the user asks; follow required confirmation.
 
 ## Capture and use keys
 
@@ -44,7 +45,7 @@ Pipe values directly into storage instead of printing them:
 
 `curl -s ... | python -c "import json,sys; print(json.load(sys.stdin)['token'])" | keys add NEW_TOKEN`
 
-Other inputs: `keys add NAME --from-env VAR`, `keys import FILE.env` (every line), `keys import FILE.env --only NAME1,NAME2` (only those names). If a different value is already saved under a name, keywarden keeps it unless you add `--replace`. Use `keys note NAME "what it is"` for context. Don't create plaintext key files in the repository.
+A key the person keeps in 1Password can be saved as a reference: `keys add NAME --op "op://Vault/Item/field"`. keywarden reads the value with `op` each time it's used and never stores it. If `op` is missing or signed out, that key fails with a plain message; tell the person. Other inputs: `keys add NAME --from-env VAR`, `keys import FILE.env` (every line), `keys import FILE.env --only NAME1,NAME2` (only those names). If a different value is already saved under a name, keywarden keeps it unless you add `--replace`. Use `keys note NAME "what it is"` for context. Don't create plaintext key files in the repository.
 
 ## Boundaries
 

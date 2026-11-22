@@ -6,15 +6,20 @@
   keys setup local                  use this computer's key store (Windows Credential Manager or the Mac Keychain)
   keys switch 1password|local       move to the other store, copying every key across
   keys strict on|off                1Password only, read fresh each time behind its own check
-  keys approvals on|off|phone       thread approvals (on by default); includes subagents and subprocesses
+  keys approvals on|off|phone|totp  thread approvals (on by default); includes subagents and subprocesses.
+                                    totp: a key request waits for the 6-digit code from your authenticator app
+  keys totp setup                   set up an authenticator app (run it in your own terminal, not through an agent)
+  keys totp test                    type a code and see if it's right (your own terminal)
   keys touchid on|off|test          approve keys with Touch ID on a Mac (Windows Hello on Windows) instead of
                                     replying in the chat; off by default (also: keys hello)
   keys touchid use command -- PROG  approve with your own program instead (it prints Verified to approve)
   keys touchid timeout SECONDS      how long to wait for a tap before the chat asks (default 60)
-  keys protect NAME                 this key always needs a tap (keys unprotect NAME to undo)
+  keys protect NAME                 this key always needs a tap, or the code in totp mode (keys unprotect NAME)
   keys phone                        approve key use from your phone (then: keys phone test)
   keys add NAME [--clipboard | --from-env VAR] [--note "what it is"]
                                     save a key (from the clipboard, a variable, a pipe, or typed hidden)
+  keys add NAME --op op://Vault/Item/field
+                                    save a 1Password reference instead of a value; each use reads it with op
   keys import FILE.env [--only A,B] save the NAME=value lines of a .env file (only A and B with --only)
   keys list                         list saved keys: what each is, when and where it was saved
   keys note NAME "what it is"       add a note to a key, shown in keys list and to each new agent session
@@ -128,12 +133,15 @@ def store(name, value, replace=False, names=None, source=None, note=None):
     if name in names and not replace:
         die(f"{name} is already saved. Add --replace to overwrite it.")
     call(store_now().save, name, value)
-    remember(name, value)
+    ref = stores.ref_path(value)
+    if ref is None:  # a 1Password reference isn't a secret, and keywarden never sees its value
+        remember(name, value)
     names.add(name)
     meta = load_json(META, {})
     old = meta.get(name, {})
     meta[name] = {k: v for k, v in {
-        "saved": time.strftime("%Y-%m-%d %H:%M"), "hint": mask(value), "kind": known_key_in(value),
+        "saved": time.strftime("%Y-%m-%d %H:%M"), "hint": None if ref else mask(value),
+        "kind": "1Password reference" if ref else known_key_in(value), "op": ref,
         "from": source, "note": note or old.get("note")}.items() if v}
     save_json(META, meta)
 
@@ -147,23 +155,30 @@ def set_meta(name, **fields):
 def describe(name, meta=None):
     """One line about a saved key, for keys list and the note at the start of each session."""
     m = (load_json(META, {}) if meta is None else meta).get(name, {})
-    bits = [m.get("note"), m.get("kind"), m.get("hint"), m.get("saved") and "saved " + m["saved"][:10],
-            m.get("from")]
+    kind = f"1Password reference: {m['op']}" if m.get("op") else m.get("kind")
+    bits = [m.get("note"), kind, m.get("hint"), m.get("saved") and "saved " + m["saved"][:10], m.get("from")]
     return "; ".join(b for b in bits if b)
 
 
 def read_value(name):
-    """A key's value, for handing to a program after approval. 1Password keys come from the approval's copies."""
+    """A key's value, for handing to a program after approval. 1Password keys come from the approval's copies.
+    A 1Password reference is read from 1Password now."""
     s = store_now()
+    v = None
     if s.kind == "local":
-        return s.read(name)
-    approved = approve.grants()
-    if name in approved and not stores.strict():
-        call(stores.cache_fill, s, approve.all_granted())
-        v = stores.cache_read(name)
-        if v is not None:
-            return v
-    return call(s.read, name)
+        v = s.read(name)
+    else:
+        if name in approve.grants() and not stores.strict():
+            call(stores.cache_fill, s, approve.all_granted())
+            v = stores.cache_read(name)
+        if v is None:
+            v = call(s.read, name)
+    if stores.ref_path(v) is not None:
+        try:
+            return stores.resolve(v)
+        except stores.StoreError as e:
+            die(f"couldn't get {name}: {e}")
+    return v
 
 
 # ---------- setup ----------
@@ -313,13 +328,31 @@ def need_approval(names, action):
 def cmd_add(args):
     """Save a key from the clipboard, an environment variable, a pipe, or typed in hidden."""
     from_env = args[args.index("--from-env") + 1] if "--from-env" in args else None
+    op_path = args[args.index("--op") + 1] if "--op" in args and args.index("--op") + 1 < len(args) else None
     rest = [a for i, a in enumerate(args)
-            if not a.startswith("--") and (i == 0 or args[i - 1] not in ("--from-env", "--note"))]
-    if len(rest) != 1:
-        die('usage: keys add NAME [--clipboard | --from-env VAR] [--note "what it is"] [--replace]'
-            "   (or pipe the key in)")
+            if not a.startswith("--") and (i == 0 or args[i - 1] not in ("--from-env", "--note", "--op"))]
+    if len(rest) != 1 or ("--op" in args and not op_path):
+        die('usage: keys add NAME [--clipboard | --from-env VAR | --op op://Vault/Item/field] [--note "what it is"] '
+            "[--replace]   (or pipe the key in)")
     name = norm_name(rest[0])
     note = args[args.index("--note") + 1] if "--note" in args else None
+    if op_path:
+        if not stores.valid_ref(op_path):
+            die(f"{op_path} isn't a 1Password reference. It looks like op://Vault/Item/field "
+                "(in 1Password, open the item, click the field's menu and pick Copy Secret Reference).")
+        names = existing_names()
+        if name in names:
+            if "--replace" not in args:
+                die(f"{name} is already saved. Add --replace to overwrite it (that needs approval).")
+            need_approval([name], "replace the saved key with a 1Password reference")
+        store(name, stores.ref_value(op_path), replace=True, names=names, note=note,
+              source=f"keys add --op in {os.getcwd()}")
+        print(f"Saved {name} as a 1Password reference to {op_path}. keywarden doesn't keep the value: each time "
+              f"{name} is used, it reads it from 1Password with op.")
+        if not stores.op_command():
+            print("Note: the 1Password CLI (op) isn't installed here, so using this key will fail until it is. "
+                  "Install it: winget install AgileBits.1Password.CLI (Mac: brew install 1password-cli)")
+        return
     if "--clipboard" in args:
         value, source = read_clipboard(), "keys add, from the clipboard"
     elif from_env:
@@ -534,6 +567,13 @@ def cmd_grant(args):
         not_found([n for n in missing if n not in saved])
     if not approve.ask(names, reason, minutes=grant_minutes()):
         sys.exit(1)
+    meta = load_json(META, {})
+    refs = [n for n in names if meta.get(n, {}).get("op")]
+    if refs:
+        print(f"{', '.join(refs)} {'is a 1Password reference' if len(refs) == 1 else 'are 1Password references'}: "
+              "each command reads the value from 1Password when it runs."
+              + ("" if stores.op_command() else " The 1Password CLI (op) isn't installed here, so those keys will "
+                 "fail until it is: winget install AgileBits.1Password.CLI (Mac: brew install 1password-cli)"))
     cmd_status([])
 
 
@@ -547,18 +587,25 @@ def cmd_approvals(args):
     cfg = load_json(CONFIG, {})
     words = {"chat": "on: approve named keys per thread; its subagents and subprocesses share access and expiry",
              "phone": "phone: every key needs a tap on your phone",
+             "totp": "totp: every key request waits for the 6-digit code from your authenticator app, typed in "
+                     "the chat (or here in your terminal)",
              "auto": "off: saved keys are available automatically to agents and subagents"}
     mode = approve.settings()[0]
     if not args:
         print(f"Approvals are {words[mode]}.")
-        if cfg.get("protected") and mode != "phone":
+        if cfg.get("protected") and mode not in ("phone", "totp"):
             print("These keys need a tap on your phone: " + ", ".join(sorted(cfg["protected"])))
         return
-    want = {"chat": "chat", "phone": "phone", "on": "chat", "off": "auto"}.get(args[0])
+    want = {"chat": "chat", "phone": "phone", "totp": "totp", "on": "chat", "off": "auto"}.get(args[0])
     if not want:
-        die("usage: keys approvals on|off|phone (chat is an alias for on)")
-    order = {"auto": 0, "chat": 1, "phone": 2}
-    if order[want] < order[mode]:  # asking less needs the person's OK
+        die("usage: keys approvals on|off|phone|totp (chat is an alias for on)")
+    if want == "totp" and mode != "totp":
+        import totp
+        if not totp.is_set_up():
+            die("set up your authenticator app first. In your own terminal, run: keys totp setup")
+    order = {"auto": 0, "chat": 1, "phone": 2, "totp": 2}
+    # Asking less needs the person's OK, and so does moving from one second factor to the other.
+    if order[want] < order[mode] or (mode in ("phone", "totp") and want != mode):
         if not approve.ask(["APPROVALS_CHANGE"], f"change approvals to {args[0]}", minutes=1, force=True):
             die("not approved, so approvals stay as they are.")
         approve.lock(["APPROVALS_CHANGE"])
@@ -663,6 +710,76 @@ def cmd_touchid(args):
         print("Approvals aren't in chat mode right now, so this applies once you run: keys approvals on")
 
 
+TOTP_USAGE = "usage: keys totp (status), keys totp setup, keys totp test"
+
+
+def ask_code(prompt):
+    """Read a code typed at the terminal. It shows as you type: a code is only good for a few seconds."""
+    try:
+        return input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return ""
+
+
+def cmd_totp(args):
+    """keys totp setup|test: approve keys with the 6-digit code from an authenticator app (keys approvals totp).
+    setup and test run only in the person's own terminal, never in an agent's command."""
+    import totp
+    sub = args[0] if args else None
+    if sub is None:
+        mode = approve.settings()[0]
+        if totp.is_set_up():
+            print("An authenticator app is set up. " + (
+                "Approvals are in totp mode: key requests wait for its 6-digit code." if mode == "totp" else
+                "To make key requests wait for its code, run: keys approvals totp"))
+        else:
+            print("No authenticator app is set up. In your own terminal, run: keys totp setup")
+        return
+    if sub not in ("setup", "test"):
+        die(TOTP_USAGE)
+    if not approve.own_terminal():
+        die(f"keys totp {sub} only runs in your own terminal, not through an agent. Open a terminal window and run "
+            f"it there.")
+    if sub == "test":
+        if not totp.is_set_up():
+            die("no authenticator app is set up yet. Run: keys totp setup")
+        good, why = totp.verify(ask_code("Code from your authenticator app: "))
+        print("That code is right." if good else f"Not right: {why}.")
+        sys.exit(0 if good else 1)
+    old = totp.saved_secret()
+    if old:
+        print("An authenticator app is already set up. To replace it, type its current code first.")
+        good, why = totp.verify(ask_code("Current code: "), secret=old)
+        if not good:
+            die(f"{why}. Nothing changed. If you lost the old authenticator, delete its secret with "
+                + (f"cmdkey /delete:{totp.NS}:{totp.SECRET_NAME}" if IS_WIN else
+                   f"security delete-generic-password -s {totp.NS} -a {totp.SECRET_NAME}")
+                + ", then run keys totp setup again.")
+    secret = totp.new_secret()
+    link = totp.uri(secret)
+    qr = totp.qr_text(link)
+    print("Add keywarden to your authenticator app (Google Authenticator, 1Password, Authy, Microsoft Authenticator).")
+    if qr:
+        print("Scan this QR code:\n")
+        print(qr)
+    print(f"Or add it by hand. Account: keywarden. Key: {secret} (time based, 6 digits, every 30 seconds).")
+    print(f"Link: {link}\n")
+    code = ask_code("Type the code your app shows now, to finish: ")
+    key = totp.b32decode(secret)
+    counter, why = totp.match(key, code)
+    if counter is None:
+        die(f"{why}. Nothing was saved. Run keys totp setup again.")
+    try:
+        totp.save_secret(secret)
+    except (OSError, SystemExit) as e:
+        die(f"couldn't save the secret in this computer's key store: {e}")
+    totp._save_used(counter)
+    print("Done. The secret is saved in this computer's key store. Check a code any time with: keys totp test")
+    if approve.settings()[0] != "totp":
+        print("To make every key request wait for a code, run: keys approvals totp")
+
+
 def cmd_protect(args):
     """keys protect NAME: this key always needs a tap. keys unprotect NAME takes that off (needs a tap)."""
     names = [norm_name(a) for a in args]
@@ -672,7 +789,8 @@ def cmd_protect(args):
     cfg["protected"] = sorted(set(cfg.get("protected", [])) | set(names))
     save_json(CONFIG, cfg)
     approve.lock(names)
-    print(f"{', '.join(names)} now need{'s' if len(names) == 1 else ''} a tap on your phone before each use.")
+    how = ("the code from your authenticator app" if approve.settings()[0] == "totp" else "a tap on your phone")
+    print(f"{', '.join(names)} now need{'s' if len(names) == 1 else ''} {how} before each use.")
 
 
 def cmd_unprotect(args):
@@ -753,7 +871,9 @@ def cmd_status(args):
     if rest:
         print("Not approved: " + ", ".join(rest))
         print('To use one, run: keys grant NAME --for "what you\'re doing"')
-    if protected:
+    if mode == "totp":
+        print("Approvals are in totp mode: a key request waits for the 6-digit code from your authenticator app.")
+    elif protected:
         print("These need a tap on the phone: " + ", ".join(sorted(protected)))
 
 
@@ -790,6 +910,12 @@ def cmd_env(args):
             continue
         if v is None:
             continue
+        if stores.ref_path(v) is not None:  # a 1Password reference: read the value now, keep it nowhere
+            try:
+                v = stores.resolve(v)
+            except stores.StoreError as e:
+                print(f"keys: couldn't load {name}: {e}", file=sys.stderr)
+                continue
         loaded.append(name)
         if ps:  # base64, so no character in a key can end the PowerShell string early
             b = base64.b64encode(v.encode()).decode()
@@ -1392,7 +1518,7 @@ def cmd_capture(args):
 
 
 COMMANDS = {"_capture": cmd_capture, "_scrub": cmd_scrub, "note": cmd_note, "setup": cmd_setup, "switch": cmd_switch, "strict": cmd_strict, "approvals": cmd_approvals,
-            "touchid": cmd_touchid, "hello": cmd_touchid,
+            "touchid": cmd_touchid, "hello": cmd_touchid, "totp": cmd_totp,
             "protect": cmd_protect, "unprotect": cmd_unprotect, "phone": cmd_phone, "remove": cmd_remove, "lock": cmd_lock, "grant": cmd_grant, "status": cmd_status, "env": cmd_env, "add": cmd_add, "import": cmd_import, "list": cmd_list, "rename": cmd_rename, "ref": cmd_ref,
             "run": cmd_run, "rescue": cmd_rescue}
 

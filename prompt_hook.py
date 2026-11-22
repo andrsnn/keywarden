@@ -133,6 +133,42 @@ def approve_named_keys(text, data, agent):
     return " ".join(contexts)
 
 
+def totp_reply(text, data, named=""):
+    """Totp mode: a waiting request is approved only by the current code from the person's authenticator app.
+    A wrong or reused code says so and leaves the request waiting. A plain yes doesn't approve. A no still says no."""
+    import approve
+    import totp
+    session = session_caller(data, AGENT) if data.get("session_id") else None
+    window = approve.APPROVE_WORD_MINUTES  # a code is proof enough to answer a request up to 12 hours old
+    if not approve.pending(window, session):
+        if named:
+            tell_agent(named)
+        sys.exit(0)
+    lead = (named + " ") if named else ""
+    code = totp.code_in(text)
+    if code:
+        good, why = totp.verify(code)
+        if not good:
+            tell_agent(f"{lead}keywarden: the code didn't work ({why}). The key request is still waiting. Tell the "
+                       "person, and ask them to reply with the current 6-digit code from their authenticator app.")
+        minutes = minutes_in(totp.CODE.sub(" ", text))
+        names = approve.answer_pending(True, minutes, window, session)
+        span = approve.span(minutes or approve.settings()[2])
+        tell_agent(f"{lead}keywarden: the person approved {', '.join(names)} for {span} with their authenticator "
+                   "code. Run the command that asked for it again.")
+    answer = answer_in(text)
+    if answer is False:
+        names = approve.answer_pending(False, max_age=window, session=session)
+        tell_agent(f"{lead}keywarden: the person said no to {', '.join(names)}. Don't ask again.")
+    if answer is True:
+        tell_agent(f"{lead}keywarden: approvals need the code from the person's authenticator app, so a yes doesn't "
+                   "approve. The key request is still waiting. Ask: \"Reply with the 6-digit code from your "
+                   "authenticator app.\"")
+    if named:
+        tell_agent(named)
+    sys.exit(0)
+
+
 def scrub_later(transcript, values):
     """Best-effort cleanup of the supplied local transcript, including writes after the hook returns."""
     if not transcript:
@@ -353,6 +389,8 @@ def main():
     try:
         import approve
         named = approve_named_keys(text, data, AGENT)
+        if approve.settings()[0] == "totp":
+            totp_reply(text, data, named)
         if named:
             tell_agent(named)
         # The word approve (or no) answers a request from up to 12 hours ago. A loose yes or ok only

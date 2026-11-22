@@ -258,6 +258,7 @@ def settings():
     """(mode, protected keys, minutes a grant lasts). mode is how a key without a grant gets one:
     "chat" (the default): the agent asks you in the chat and you reply with any clear yes.
     "phone": every key needs a tap on your phone (keys approvals phone).
+    "totp": every key needs the 6-digit code from your authenticator app, typed in the chat (keys approvals totp).
     "auto": granted at once with no question (keys approvals off)."""
     cfg = _load(STATE / "config.json", {})
     if "approvals" not in cfg:
@@ -268,7 +269,7 @@ def settings():
         cfg["approvals"] = "chat"
         _save(STATE / "config.json", cfg)
     mode = {True: "phone", False: "auto", "phone": "phone", "auto": "auto", "off": "auto",
-            "chat": "chat"}.get(cfg.get("approvals", "chat"), "chat")
+            "chat": "chat", "totp": "totp"}.get(cfg.get("approvals", "chat"), "chat")
     return mode, set(cfg.get("protected", [])), cfg.get("auto_minutes", 60)
 
 
@@ -295,6 +296,8 @@ def needs_tap(names):
     With no phone set up (and no Touch ID, or approver you turned on), a tap can't happen, so they're asked for
     in the chat instead."""
     mode, protected, _ = settings()
+    if mode == "totp":  # the authenticator code is the second factor, for protected keys too
+        return []
     if not phone_config() and sys.platform != "darwin" and not local_auth.chosen():
         return []
     return list(names) if mode == "phone" else [n for n in names if n in protected]
@@ -372,7 +375,7 @@ def grant_from_prompt(names, what, who=TERMINAL, minutes=None):
     mode, protected, _ = settings()
     if mode == "auto":
         return allow_automatic(names, who)
-    allowed = sorted(set(names) - protected) if mode != "phone" else []
+    allowed = sorted(set(names) - protected) if mode not in ("phone", "totp") else []
     if not allowed:
         return []
     explicit_duration = minutes is not None
@@ -407,6 +410,8 @@ def ask(names, what, minutes=60, timeout=300, force=False):
         if denied:
             return False
         rest = [n for n in rest if n not in local]
+    if rest and mode == "totp":  # the person types the authenticator code: here, or in the chat
+        return _totp_approve(rest, what, who, minutes)
     if rest:  # ask in the chat: the message hook grants these when the person replies approve
         add_pending(rest, what, who)
         print(f"keys: {', '.join(rest)} needs your OK. Ask the person: \"I need {', '.join(rest)}. Reason: {what}. "
@@ -455,6 +460,50 @@ def ask(names, what, minutes=60, timeout=300, force=False):
               f"{where} on this computer.", file=sys.stderr)
     else:
         print(f"keys: denied on the {src}.", file=sys.stderr)
+    return False
+
+
+def own_terminal():
+    """True when a person is typing at their own terminal, not an agent's command. Agents' commands carry a
+    thread token (AGENT_KEYS_CALLER, which the hook stops them from clearing), Claude Code marks its commands
+    with CLAUDECODE, and neither has a keyboard on stdin."""
+    if any(os.environ.get(v) for v in ("AGENT_KEYS_CALLER", "CLAUDECODE", "CODEX_SANDBOX", "CODEX_THREAD_ID")):
+        return False
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _totp_approve(names, what, who, minutes):
+    """Totp mode. At the person's own terminal, ask for the code right there. From an agent, leave the request
+    waiting: the message hook approves it when the person replies in the chat with the current code."""
+    import totp
+    if not totp.is_set_up():
+        print("keys: approvals need an authenticator code, but no authenticator is set up. In your own terminal, "
+              "run keys totp setup (or keys approvals on to approve in the chat).", file=sys.stderr)
+        return False
+    if who == TERMINAL and own_terminal():
+        import getpass
+        try:
+            code = getpass.getpass(f"Code from your authenticator app to approve {', '.join(names)}: ")
+        except (EOFError, KeyboardInterrupt):
+            return False
+        good, why = totp.verify(code)
+        if not good:
+            print(f"keys: {why}. Nothing was approved.", file=sys.stderr)
+            log_use(names, what, f"wrong authenticator code ({who})")
+            return False
+        _set(names, time.time() + minutes * 60, who)
+        print(f"keys: {', '.join(names)} approved with your authenticator code for {span(minutes)}.", file=sys.stderr)
+        log_use(names, what, f"approved with an authenticator code for {span(minutes)} ({who})")
+        return True
+    add_pending(names, what, who)
+    print(f"keys: {', '.join(names)} needs the code from the person's authenticator app. Ask the person: \"I need "
+          f"{', '.join(names)}. Reason: {what}. Reply with the 6-digit code from your authenticator app (add a time "
+          "like 2h to choose how long it lasts).\" A yes without the code doesn't approve. Then end your turn, and "
+          "run this command again after they reply.", file=sys.stderr)
+    log_use(names, what, "asked for an authenticator code in the chat")
     return False
 
 

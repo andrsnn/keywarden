@@ -51,7 +51,7 @@ You: approve 30m
 
 Any clear yes works, in your own words and with typos: "ok, go ahead", "sure, get it deployed", "GO", "aprove". A clear no, like "no", "hold off" or "not that key", turns it down. A reply that doesn't answer, like a question, leaves the request waiting.
 
-**What a chat yes is for.** It is not a security check: anything that can type into the chat can type "yes". It gives you two things: you see which keys each agent is using, and access runs out, so a long task doesn't hold a key forever. For a real check, turn on Touch ID or Windows Hello (`keys touchid on`) or phone approval (`keys approvals phone`): then a key request waits for your fingerprint or a tap on your phone, which an agent or a prompt in a web page can't fake. A one-time code (TOTP) from an authenticator app is planned as a third option.
+**What a chat yes is for.** It is not a security check: anything that can type into the chat can type "yes". It gives you two things: you see which keys each agent is using, and access runs out, so a long task doesn't hold a key forever. For a real check, turn on Touch ID or Windows Hello (`keys touchid on`) or phone approval (`keys approvals phone`): then a key request waits for your fingerprint or a tap on your phone, which an agent or a prompt in a web page can't fake. A third option is a code from an authenticator app (`keys approvals totp`): a key request then waits until you type the app's current 6-digit code in the chat.
 
 **This helps with long context threads:** remembering that a key exists does not authorize its use. After compaction or resume, keywarden checks the current approval and expiry again. If an overnight task drifts into work needing another credential, it has to get your permission. This limits key access; it does not approve individual API calls or control how an approved key is used.
 
@@ -85,7 +85,7 @@ If the plugin cannot save and replace safely, it blocks the message with an acti
 
 ## How the security layer works
 
-**Two layers.** Chat approval gives you visibility and expiry: which keys a thread uses, and for how long. The real gate is the second factor: Touch ID, Windows Hello or a phone tap (a TOTP code is planned). Turn one on for keys that matter.
+**Two layers.** Chat approval gives you visibility and expiry: which keys a thread uses, and for how long. The real gate is the second factor: Touch ID, Windows Hello, a phone tap, or the 6-digit code from an authenticator app. Turn one on for keys that matter.
 
 **Storage is shared. Approval is scoped to a thread and specific key names.** Claude and Codex see the same saved names, but approval in one thread does not approve another.
 
@@ -124,6 +124,8 @@ This is hook-enforced **thread binding**, not OS process isolation. Programs run
 | **1Password** | Synced keys and shared vaults. Run `keys setup 1password`. Unlocking 1Password can approve a thread; unsuccessful unlocks fall back to chat. Set `"unlock_1password": false` in config.json to use chat approval. | Fake CLI tested; real authentication and unlock prompts unverified. |
 | **Phone / biometrics** | `keys approvals phone` requires phone or local biometric approval. Set up the phone with `keys phone`. | Signature logic tested; real phone, Touch ID, and Windows Hello unverified. |
 | **Touch ID / Windows Hello** | `keys touchid on` approves chat requests with a tap on this computer. Off by default. See below. | Fake approver tested on Windows and macOS. The Swift helper builds and times out on macOS CI. A real fingerprint tap is unverified. |
+| **Authenticator codes (TOTP)** | `keys approvals totp` makes each key request wait for the 6-digit code from your authenticator app. Off by default. See below. | Tested with the RFC 6238 test codes and a test key store. Not yet tried with a real authenticator app. |
+| **1Password references** | `keys add NAME --op op://Vault/Item/field` saves the reference. keywarden reads the value with `op` each time the key is used and never stores it. | Fake CLI tested; real 1Password unverified. |
 | **Protected keys** | `keys protect NAME` keeps an extra approval check. Pasting or naming it does not bypass that check. | Removing protection requires approval. |
 
 With 1Password, `keys strict on` disables local caching and reads fresh through its authentication. This is independent of thread approval; 1Password controls when it prompts.
@@ -152,6 +154,39 @@ keys touchid use command -- /path/to/approve-prog --flag
 
 keywarden runs the program with the request as its last argument and the timeout in seconds in `AGENT_KEYS_TIMEOUT`. The last line it prints decides: `Verified` approves, `Timeout` or a line starting with `unavailable` sends the request to the chat, and anything else denies it. With `--check` it should print `available`. Plugging in a program asks for your OK in the chat first, because that program can approve every key. Python code can add an approver with `local_auth.register(name, approver)`.
 
+### Approve with an authenticator code (optional)
+
+You can make key requests wait for a code from an authenticator app, like Google Authenticator, 1Password or Authy:
+
+```sh
+keys totp setup        # shows a QR code (or a key to type in), then asks for the first code
+keys totp test         # type a code and see if it's right
+keys approvals totp    # from now on, key requests wait for a code
+```
+
+Run `keys totp setup` and `keys totp test` in your own terminal. They refuse to run from an agent's command. The secret is saved in this computer's key store, not in a file.
+
+When an agent asks for a key, it asks you for the code:
+
+```text
+Agent: I need STRIPE_SECRET_KEY to test the refund.
+       Reply with the 6-digit code from your authenticator app.
+
+You: 492 017 2h
+```
+
+The code approves the waiting request for one hour, or for the time you add, like `2h`. Each code works once. keywarden accepts the current code and the one just before or after it, in case a clock is a little off. If you type a wrong or used code, the agent tells you and the request keeps waiting. In this mode a "yes" without a code doesn't approve anything, and neither does an `approve NAME for 8h` line or pasting a key. A "no" still turns a request down. Protected keys take the code too. If you run `keys grant` in your own terminal, it asks for the code right there.
+
+To go back to replying yes in the chat, run `keys approvals on`. That asks for a code too.
+
+### Keep a key in 1Password and save only the reference
+
+```sh
+keys add STRIPE_SECRET_KEY --op "op://Dev/Stripe/credential"
+```
+
+keywarden saves the path, not the key. Each time the key is used, through `keys run` or an agent's command, keywarden reads the value with the 1Password CLI (`op`) and doesn't keep it. `keys list` shows the path. This works with either store. In 1Password, open the item, click the field's menu and pick Copy Secret Reference to get the path. If `op` isn't installed or you're signed out of 1Password, keywarden says so and only that key fails. Approval works the same as for any other key.
+
 <details>
 <summary><strong>Useful commands</strong></summary>
 
@@ -160,6 +195,8 @@ keywarden runs the program with the request as its last argument and the timeout
 | `keys list` / `keys status` | Find saved names and see access mode and grants. |
 | `keys approvals` / `on` / `off` | Inspect, enable, or disable thread approval. |
 | `keys touchid on` / `off` / `test` | Approve requests with Touch ID (Windows Hello on Windows) instead of the chat. |
+| `keys totp setup` / `test`, `keys approvals totp` | Approve requests with the 6-digit code from an authenticator app. |
+| `keys add NAME --op op://Vault/Item/field` | Save a 1Password reference. The value is read from 1Password each time the key is used. |
 | `keys lock [NAME ...]` | Revoke future loading for this thread and its helpers; from your terminal, revoke for all threads. |
 | `keys note NAME "description"` | Tell agents what a key is for. |
 | `keys add NAME --clipboard` | Save a copied key without pasting into chat. |
@@ -183,6 +220,6 @@ Uninstall with `python3 install.py --uninstall`. Saved keys stay in their store.
 python3 test_all.py
 ```
 
-Tests cover approval-on defaults, up-front named consent, thread/subagent sharing, subprocess inheritance, unrelated-thread isolation, expiry and lock, both agents' native hooks, storage, output masking, and transcript cleanup. Native tests use synthetic keys and a local model stub; no real model API is called. Plugin tests cover literal replacement, Unicode, multiline/repeated values, launcher selection, and safe failure; they use Node.js 22.6+ when available. Shell selection on Windows is mocked; real Windows, 1Password authentication, and approval hardware remain unverified. Phone tests need `cryptography`; shell tests need Bash. `python3 e2e_claude.py` separately tests real Claude sessions using your account.
+Tests cover authenticator codes and 1Password references, approval-on defaults, up-front named consent, thread/subagent sharing, subprocess inheritance, unrelated-thread isolation, expiry and lock, both agents' native hooks, storage, output masking, and transcript cleanup. Native tests use synthetic keys and a local model stub; no real model API is called. Plugin tests cover literal replacement, Unicode, multiline/repeated values, launcher selection, and safe failure; they use Node.js 22.6+ when available. Shell selection on Windows is mocked; real Windows, 1Password authentication, and approval hardware remain unverified. Phone tests need `cryptography`; shell tests need Bash. `python3 e2e_claude.py` separately tests real Claude sessions using your account.
 
 Hook references: [Codex](https://learn.chatgpt.com/docs/hooks), [Claude Code](https://code.claude.com/docs/en/hooks).

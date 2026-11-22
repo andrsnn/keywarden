@@ -156,6 +156,52 @@ class OnePassword:
         self.op("item", "edit", old, "--vault", self.vault, "--title", new)
 
 
+# ---------- 1Password references (keys add NAME --op op://Vault/Item/field) ----------
+# The store holds the reference, never the value. Each use reads the value with `op read` at that moment.
+
+OP_REF = "keywarden-1password-ref:"
+SIGNED_OUT = ("sign in", "signin", "signed in", "not signed", "no accounts", "integration", "unlock", "session expired")
+
+
+def ref_value(path):
+    """What the store keeps for a 1Password reference."""
+    return OP_REF + path
+
+
+def ref_path(value):
+    """The op:// path if this stored value is a 1Password reference, else None."""
+    return value[len(OP_REF):] if isinstance(value, str) and value.startswith(OP_REF) else None
+
+
+def valid_ref(path):
+    """op://vault/item/field, or op://vault/item/section/field."""
+    parts = path[5:].split("/") if path.startswith("op://") else []
+    return 3 <= len(parts) <= 4 and all(p.strip() for p in parts)
+
+
+def read_ref(path, timeout=120):
+    """Read a 1Password reference now with `op read`. Raises StoreError with a plain message if it can't."""
+    try:
+        r = OnePassword().op("read", path, check=False, timeout=timeout)
+    except OSError as e:
+        raise StoreError(f"the 1Password CLI (op) couldn't start ({e.strerror or e}). Install it: winget install "
+                         "AgileBits.1Password.CLI (Mac: brew install 1password-cli)")
+    if r.returncode != 0:
+        said = (r.stderr or r.stdout).strip()[:300]
+        if any(w in said.lower() for w in SIGNED_OUT):
+            raise StoreError(f"1Password isn't signed in, so {path} can't be read. Open the 1Password app and sign "
+                             f"in (Settings > Developer: Integrate with 1Password CLI), or run op signin. 1Password "
+                             f"said: {said}")
+        raise StoreError(f"1Password couldn't read {path}: {said or 'no reason given'}")
+    return r.stdout.rstrip("\r\n")
+
+
+def resolve(value):
+    """A stored value as a program should get it: a 1Password reference is read now, anything else is as is."""
+    path = ref_path(value)
+    return value if path is None else read_ref(path)
+
+
 def current():
     kind = os.environ.get("AGENT_KEYS_BACKEND") or config().get("backend") or "local"
     return OnePassword() if kind == "1password" else Local()
