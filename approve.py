@@ -306,6 +306,64 @@ def needs_tap(names):
 PENDING = STATE / "pending.json"
 PENDING_MINUTES = 30  # a loose reply (yes, ok, sure) answers requests this recent
 APPROVE_WORD_MINUTES = 12 * 60  # the word approve answers requests this recent, so a late reply still works
+# A yes in the chat covers its session this long (owner, Nov 22: "when I say approve one time" it should hold).
+CHAT_MINUTES = 12 * 60
+STANDING = STATE / "standing.json"  # {session: {"until": time, "at": time, "advance": bool}}
+
+
+def chat_minutes():
+    """How long a yes in the chat lasts, unless the person names a time. "chat_minutes" in config.json changes it."""
+    return _load(STATE / "config.json", {}).get("chat_minutes", CHAT_MINUTES)
+
+
+def _standing_all():
+    now = time.time()
+    data = _load(STANDING, {})
+    return {k: v for k, v in (data if isinstance(data, dict) else {}).items()
+            if isinstance(v, dict) and isinstance(v.get("until"), (int, float)) and v["until"] > now}
+
+
+def standing(who):
+    """The session's standing chat approval, or None: {"until", "at", "advance"}."""
+    return _standing_all().get(thread_scope(who)) if who else None
+
+
+def set_standing(who, minutes, advance):
+    """A yes in the chat covers every saved key this session asks for until it runs out (protected keys still
+    need their tap). advance=True means the yes came before any request was waiting."""
+    if not who or who == TERMINAL:
+        return None
+    who = thread_scope(who)
+    table = _standing_all()
+    if (table.get(who) or {}).get("advance") is False:
+        advance = False  # once it has answered a request, keep calling it a chat approval
+    until = time.time() + minutes * 60
+    table[who] = {"until": until, "at": time.time(), "advance": advance}
+    _save(STANDING, table)
+    return until
+
+
+def _drop_standing(who):
+    table = {k: v for k, v in _standing_all().items() if who != "all" and k != thread_scope(who)}
+    if table:
+        _save(STANDING, table)
+    else:
+        STANDING.unlink(missing_ok=True)
+
+
+def end_standing(who, why="the person said no in the chat"):
+    """A no or stop from the person ends the session's standing approval and its grants at once."""
+    if not who:
+        return False
+    who = thread_scope(who)
+    had = who in _standing_all()
+    _drop_standing(who)
+    held = sorted(_all().get(who, {}))
+    if held:
+        lock(who=who)
+    if had or held:
+        log_use(held or ["(standing approval)"], why, f"ended ({who})")
+    return had or bool(held)
 
 
 def asked_from(r, session):
@@ -343,11 +401,46 @@ def answer_pending(yes, minutes=None, max_age=PENDING_MINUTES, session=None):
         PENDING.unlink(missing_ok=True)
     names = sorted({n for r in reqs for n in r["names"]})
     if yes and names:
-        minutes = minutes or settings()[2]
+        minutes = minutes or (chat_minutes() if settings()[0] == "chat" else settings()[2])  # totp keeps its hour
         for r in reqs:  # each request's keys go only to the caller that asked
             _set(r["names"], time.time() + minutes * 60, r.get("caller", TERMINAL))
             log_use(r["names"], r["what"], f"approved in the chat for {span(minutes)} ({r.get('caller', TERMINAL)})")
+    if yes and names and session and settings()[0] == "chat":
+        set_standing(session, minutes, advance=False)  # later asks from this session go straight through
+    if not yes and session:
+        end_standing(session)
     return names
+
+
+def approve_in_advance(session, minutes=None):
+    """A clear yes in the chat with nothing waiting: the session's next keys grant goes straight through.
+    Returns when it ends, or None when it can't apply (no session, or a mode where a chat yes doesn't approve)."""
+    if not session or settings()[0] != "chat":
+        return None
+    minutes = minutes or chat_minutes()
+    until = set_standing(session, minutes, advance=True)
+    if until:
+        log_use(["(any saved key)"], "a yes in the chat with no request waiting",
+                f"approved in advance in the chat for {span(minutes)} ({thread_scope(session)})")
+    return until
+
+
+def _covered(names, what, who):
+    """Keys a standing chat approval lets through now. Protected keys are never covered: they keep their tap."""
+    st = standing(who)
+    if not st or settings()[0] != "chat":
+        return []
+    ok = sorted(set(names) - settings()[1])
+    if ok:
+        _set(ok, st["until"], who)
+        how = "approved in advance in the chat" if st.get("advance") else "covered by an approve in the chat"
+        log_use(ok, what, f"{how}, {_left_span(who)} left ({thread_scope(who)})")
+    return ok
+
+
+def _left_span(who):
+    st = standing(who)
+    return span(max(1, round((st["until"] - time.time()) / 60))) if st else "a while"
 
 
 def log_use(names, what, how):
@@ -402,6 +495,12 @@ def ask(names, what, minutes=60, timeout=300, force=False):
         _set(rest, time.time() + auto_minutes * 60, who)
         log_use(rest, what, f"allowed (approvals off) ({who})")
         rest = []
+    if rest and mode == "chat" and not force:  # the person already said yes in this session's chat
+        covered = _covered(rest, what, who)
+        if covered:
+            print(f"keys: {', '.join(covered)} approved, because the person already said yes in this chat "
+                  f"(good for {_left_span(who)} more). Don't ask them again.", file=sys.stderr)
+        rest = [n for n in rest if n not in covered]
     if rest and mode == "chat" and not force:  # keys in 1Password: unlocking 1Password is the approval
         unlocked = _unlock_1password(rest, what, who, minutes)
         rest = [n for n in rest if n not in unlocked]
@@ -414,9 +513,12 @@ def ask(names, what, minutes=60, timeout=300, force=False):
         return _totp_approve(rest, what, who, minutes)
     if rest:  # ask in the chat: the message hook grants these when the person replies approve
         add_pending(rest, what, who)
-        print(f"keys: {', '.join(rest)} needs your OK. Ask the person: \"I need {', '.join(rest)}. Reason: {what}. "
-              f"Reply approve, or approve 1h. Any clear yes works.\" Then end your turn, and run this command again after they "
-              "approve.", file=sys.stderr)
+        protected = sorted(set(rest) & settings()[1])
+        print(f"keys: {', '.join(rest)} needs your OK. Ask the person once: \"I need {', '.join(rest)}. Reason: "
+              f"{what}. Reply approve.\" Then end your turn, and run this command again after they reply. One "
+              f"approve covers every saved key this session asks for in the next {span(chat_minutes())}"
+              + (f", except {', '.join(protected)}, which is protected" if protected else "")
+              + ". Never ask again for a key keys status lists as granted.", file=sys.stderr)
         log_use(rest, what, "asked in the chat")
         return False
     if not tap:  # everything was approved above (1Password unlock, or approvals off)
@@ -567,3 +669,5 @@ def lock(names=None, who="all"):
         _save(GRANTS, {"callers": a})
     else:
         GRANTS.unlink(missing_ok=True)
+    if not names:  # locking every key also ends the standing chat approval, so the next ask asks again
+        _drop_standing(who)

@@ -29,7 +29,9 @@ def main():
             ("Approval controls are off: ordinary saved keys work automatically for agents and subagents. "
              if approve.settings()[0] == "auto" else
              "Approval is required for this thread; its subagents and subprocesses share approved keys and expiry. "
-             "Other saved keys need permission. The user can preapprove named keys with: approve NAME1 NAME2 for 8h. ") +
+             "Other saved keys need permission. Run keys grant before asking the person, and ask once for every key "
+             "you need. One approve in the chat covers this thread for 12 hours, so never ask again for a key keys "
+             "status lists as granted. The user can preapprove named keys with: approve NAME1 NAME2 for 8h. ") +
             ("Approvals are in totp mode: a key request is approved only when the person replies with the 6-digit "
              "code from their authenticator app, and a yes alone doesn't approve. "
              if approve.settings()[0] == "totp" else "") +

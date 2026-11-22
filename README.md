@@ -38,7 +38,7 @@ Agent: Approved OPENAI_API_KEY and GITHUB_TOKEN for this thread for 8 hours,
        including its subagents and subprocesses.
 ```
 
-`approve OPENAI_API_KEY GITHUB_TOKEN for 8h` also works. Put the approval on its own line and use saved names. Without a duration, named approval lasts **one hour**. Repeating a named approval with a different duration sets its new expiry.
+`approve OPENAI_API_KEY GITHUB_TOKEN for 8h` also works. Put the approval on its own line and use saved names. Without a duration, named approval lasts **12 hours**. Repeating a named approval with a different duration sets its new expiry.
 
 **3. The agent works within that access.** Programs receive approved values through environment variables. A newly spawned helper shares the thread's approval. Another Claude/Codex thread—or a task needing a different saved key—must ask:
 
@@ -49,7 +49,9 @@ Agent: Use STRIPE_SECRET_KEY for this task?
 You: approve 30m
 ```
 
-A language model reads your reply, not a word list: Claude Haiku, through your own `claude` login, decides whether it says yes, no or neither. So any clear yes works, in your own words, with typos or other topics mixed in: "ok, go ahead", "GO", "aprove", "stop using the laptop, and I approve using a key". If no model can be reached, keywarden falls back to simple word matching. A clear no, like "no", "hold off" or "not that key", turns it down. A reply that doesn't answer, like a question, leaves the request waiting.
+A language model reads your reply, not a word list: Claude Haiku, through your own `claude` login, decides whether it says yes, no or neither. So any clear yes works, in your own words, with typos or other topics mixed in: "ok, go ahead", "GO", "aprove", "stop using the laptop, and I approve using a key". If no model can be reached, keywarden falls back to simple word matching. A clear no, like "no", "hold off" or "not that key", turns it down. A reply that doesn't answer, like a question, leaves the request waiting. The model also sees the agent's last message, so "approve, go" after a status message that lists the keys counts as a yes.
+
+**One approve covers the thread.** A yes in the chat lasts 12 hours, or the time you name, like `approve 1h`. In that time, every saved key the thread or its helpers ask for goes straight through, except keys you protected with `keys protect`. If you say approve before the agent has asked, that counts too: its next `keys grant` goes through. A clear "no", or a message that just says "stop", ends the thread's approval at once. Other threads still ask on their own.
 
 **What a chat yes is for.** It is not a security check: anything that can type into the chat can type "yes". It gives you two things: you see which keys each agent is using, and access runs out, so a long task doesn't hold a key forever. For a real check, turn on Touch ID or Windows Hello (`keys touchid on`) or phone approval (`keys approvals phone`): then a key request waits for your fingerprint or a tap on your phone, which an agent or a prompt in a web page can't fake. A third option is a code from an authenticator app (`keys approvals totp`): a key request then waits until you type the app's current 6-digit code in the chat.
 

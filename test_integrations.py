@@ -191,7 +191,7 @@ class CodexFlowTests(unittest.TestCase):
         self.assertIn("for 2 hours", json.dumps(self.message("approve 2h")))
         self.run_script("keys.py", "lock")
         self.grant(me)
-        self.assertIn("for 1 hour", json.dumps(self.message("approve")))
+        self.assertIn("for 12 hours", json.dumps(self.message("approve")))
 
     def test_task_paste_respects_stronger_approval_settings(self):
         for extra in ({"protected": ["DEMO_API_KEY"]}, {"approvals": "phone"}):

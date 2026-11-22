@@ -74,7 +74,7 @@ def answer_in(text):
     """True if a reply approves a waiting request, False if it turns it down, None if it does neither."""
     if len(text) > 400:
         return None
-    t = FRIENDLY_NO.sub("fine", re.sub(r"\s+", " ", text.lower().replace("’", "'")))
+    t = norm(text)
     if REFUSE.search(t) or NO_START.match(t):
         return False
     if UNSURE.search(t):
@@ -82,6 +82,56 @@ def answer_in(text):
     if YES_START.match(t) or GO_ON.search(t):
         return True
     return None
+
+
+def norm(text):
+    return FRIENDLY_NO.sub("fine", re.sub(r"\s+", " ", text.lower().replace("’", "'")))
+
+
+def approve_word_yes(text):
+    """The word approve, with no refusal or hesitation about the keys beside it. Counts even inside a complaint:
+    "I keep saying approve, it's not working, please fix" (owner, Nov 22)."""
+    if len(text) > 2000 or not APPROVE_ANY.search(text):
+        return False
+    t = norm(text)
+    return not (REFUSE.search(t) or NO_START.match(t) or UNSURE.search(t))
+
+
+def last_agent_message(path, limit=2_000_000):
+    """The agent's last message to the person, from the session log the hook input names. "" when it can't be read.
+    Reads Claude Code's log (type assistant) and Codex's (response_item with an assistant message)."""
+    if not path:
+        return ""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - limit))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except (OSError, ValueError):
+        return ""
+    for line in reversed(lines):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict) or e.get("isSidechain"):
+            continue
+        kind = e.get("type")
+        msg = e.get("message") if kind == "assistant" else e.get("payload") if kind == "response_item" else None
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        body = content if isinstance(content, str) else "\n".join(
+            c.get("text") or "" for c in (content or []) if isinstance(c, dict) and c.get("type") in ("text", "output_text"))
+        if body.strip():
+            return body.strip()[-3000:]
+    return ""
+
+
+def asks_for_keys(context):
+    """True when the agent's message asks the person to approve keys."""
+    return bool(context and re.search(r"(?i)\bapprov", context)
+                and re.search(r"(?i)\bkeys?\b|\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b", context))
 
 
 def minutes_in(text):
@@ -116,7 +166,7 @@ def approve_named_keys(text, data, agent):
         # Unknown words/names invalidate the line, so qualifiers cannot accidentally expand consent.
         if not names or not set(names) <= saved:
             continue
-        minutes = minutes_in(directive["duration"]) if directive["duration"] else approve.settings()[2]
+        minutes = minutes_in(directive["duration"]) if directive["duration"] else approve.chat_minutes()
         if minutes is None or minutes <= 0:
             continue
         allowed = approve.grant_from_prompt(names, directive[0], session_caller(data, agent), minutes)
@@ -352,14 +402,59 @@ def rewrite():
     print(json.dumps(out))
 
 
-def reply_answer(text, requests):
-    """What the reply says about the waiting requests: True, False or None, and whether a model read it.
-    A language model reads it (intent.py). The word lists in answer_in are only the fallback when no model answers."""
+def reply_answer(text, requests, context=None, word_counts=True):
+    """What the reply says about the waiting requests (or about keys, when none is waiting): True, False or None,
+    and whether a model read it. A language model reads it (intent.py), with the agent's last message as context.
+    The word approve with no refusal beside it is a yes even when the model isn't sure (word_counts=False keeps the
+    model's reading, for a message that may only mention the word). The word lists in answer_in are only the
+    fallback when no model answers."""
     try:
         import intent
-        return intent.judge(text, requests), True
+        answer, by_model = intent.judge(text, requests, context), True
     except BaseException:
-        return answer_in(text), False
+        answer, by_model = answer_in(text), False
+    if answer is not True and (word_counts or not by_model) and approve_word_yes(text):
+        answer = True
+    return answer, by_model
+
+
+STOP = re.compile(r"^\s*stop(?:[\s,.!]+(?:stop|now|everything|it|that|all|please))*[\s,.!]*$")  # the whole message
+
+
+def no_request_reply(text, data, session):
+    """Nothing is waiting in this session. A clear yes approves in advance: the session's next keys grant goes
+    straight through. A clear no or stop ends what the session holds."""
+    import approve
+    if approve.settings()[0] != "chat":
+        return
+    held = bool(approve.standing(session) or approve.grants(session))
+    if held and STOP.match(norm(text)):
+        approve.end_standing(session, "the person said stop in the chat")
+        tell_agent("keywarden: the person said stop, so this session's key approvals ended. Don't use keys until "
+                   "they approve again.")
+    loose = answer_in(text)
+    context = None
+    candidate = bool(APPROVE_ANY.search(text))
+    if not candidate and loose is True:  # a plain "yes" counts only if the agent just asked for keys
+        context = last_agent_message(data.get("transcript_path"))
+        candidate = asks_for_keys(context)
+    if not candidate and not (held and loose is False):
+        return
+    if context is None:
+        context = last_agent_message(data.get("transcript_path"))
+    # With nothing waiting, "fix the approve flow" only mentions the word. It counts as a yes when the model reads
+    # it as one, or when the agent's last message asked for keys.
+    answer, _ = reply_answer(text, [], context, word_counts=asks_for_keys(context))
+    if answer is True and candidate:
+        minutes = minutes_in(text) or approve.chat_minutes()
+        if approve.approve_in_advance(session, minutes):
+            tell_agent(f"keywarden: the person approved key use in advance for this session for {approve.span(minutes)}. "
+                       "Run keys grant NAME --for \"why\" for the keys you need now: it goes straight through. "
+                       "Don't ask the person again. Protected keys still need their tap.")
+    elif answer is False and held:
+        approve.end_standing(session)
+        tell_agent("keywarden: the person said no, so this session's key approvals ended. Don't use keys until they "
+                   "approve again.")
 
 
 def main():
@@ -410,7 +505,11 @@ def main():
         # answers one from the last 30 minutes, so it can't grant an old request by accident.
         session = session_caller(data, AGENT) if data.get("session_id") else None
         waiting = approve.pending(approve.APPROVE_WORD_MINUTES, session)
-        answer, by_model = reply_answer(text, waiting) if waiting else (None, False)
+        if not waiting:
+            if session:
+                no_request_reply(text, data, session)
+            sys.exit(0)
+        answer, by_model = reply_answer(text, waiting, last_agent_message(data.get("transcript_path")))
         # A model's clear reading answers a request up to 12 hours old. The fallback word lists keep the old rule:
         # the word approve (or a no) reaches 12 hours back, a loose yes only the last 30 minutes.
         window = (approve.APPROVE_WORD_MINUTES if by_model or APPROVE_ANY.search(text) or answer is False
@@ -419,8 +518,11 @@ def main():
             if answer:
                 minutes = minutes_in(text)
                 names = approve.answer_pending(True, minutes, window, session)
-                span = approve.span(minutes or approve.settings()[2])
-                tell_agent(f"keywarden: the person approved {', '.join(names)} for {span}. "
+                span = approve.span(minutes or approve.chat_minutes())
+                more = (" That approve also covers any other saved key this session asks for in that time (not "
+                        "protected keys): keys grant lets it straight through, so don't ask again."
+                        if session and approve.settings()[0] == "chat" else "")
+                tell_agent(f"keywarden: the person approved {', '.join(names)} for {span}.{more} "
                             "Run the command that asked for it again.")
             else:
                 names = approve.answer_pending(False, max_age=window, session=session)
