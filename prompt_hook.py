@@ -16,20 +16,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # A reply to a waiting key request approves it when its intent is a clear yes, in any words: "ok, test that
 # it works", "go ahead", "get this fixed and deploy it". A clear no turns it down. Anything unsure, or a reply
 # that never answers (a question, an unrelated task), leaves the request waiting.
-YES_START = re.compile(r"^\s*(?:approve[sd]?|yes|yep|yup|yeah|ya|y|ok|okay|k|kk|sure|fine|alright|all right|allow(?:ed)?"
+# "approve" as people type it in a hurry: aprove, apprve, approv, appove (owner, Nov 21: "make it work based on my
+# intent, not the exact string").
+APPROVE_WORD = r"a+p+r*o*v+e*[sd]?"
+YES_START = re.compile(r"^\s*(?:" + APPROVE_WORD + r"|go(?:\s+go)*|yes|yep|yup|yeah|ya|y|ok|okay|k|kk|sure|fine|alright|all right|allow(?:ed)?"
                        r"|grant(?:ed)?|go ahead|go for it|do it|sounds good)\b")
-GO_ON = re.compile(r"\b(?:approve[sd]?|yes|yep|yeah|sure|go ahead|go for it|do it|proceed|carry on|keep going|continue"
+GO_ON = re.compile(r"\b(?:" + APPROVE_WORD + r"|go(?! away)|yes|yep|yeah|sure|go ahead|go for it|do it|proceed|carry on|keep going|continue"
                    r"|ship it|use (?:it|them|the keys?|that key)|you can use|you have (?:my )?(?:ok|okay|permission|approval)"
                    r"|(?:get|have) (?:this|it|that|them) (?:fixed|done|working|deployed|shipped|running)"
                    r"|make sure (?:it|this|that)|run it|test (?:it|that|this)|that'?s fine|fine by me)\b")
 NO_START = re.compile(r"^\s*(?:no|nope|nah|deny|denied|don't|do not|stop|cancel|never|not|hold off)\b")
-REFUSE = re.compile(r"\b(?:deny|denied|reject(?:ed)?|refuse[sd]?|hold off|no way|never ?mind|cancel"
+REFUSE = re.compile(r"\b(?:deny|denied|reject(?:ed)?|refuse[sd]?|hold off|no way|never ?mind|cancel|don't go|do not go"
                     r"|not (?:that|this|those|these|yet|now|right now|for this)"
-                    r"|(?:don't|do not|didn't|never|not|no) (?:approve[sd]?|use|grant|give|allow|do (?:it|that)|touch|want|need))\b")
-UNSURE = re.compile(r"\b(?:no|not|nope|never|stop|wait|hold on|cancel|maybe|later)\b")
+                    r"|(?:don't|do not|didn't|never|not|no) (?:" + APPROVE_WORD + r"|use|grant|give|allow|do (?:it|that)|touch|want|need))\b")
+# Words that mean "not yet". A bare "not" or "no" elsewhere in a reply ("based on my intent, not the exact string")
+# no longer blocks a clear yes: a real refusal of the key is caught by REFUSE and NO_START first.
+UNSURE = re.compile(r"\b(?:wait|hold on|stop|cancel|maybe|later)\b")
 FRIENDLY_NO = re.compile(r"\b(?:no problem|no worries|no prob|not a problem)\b")
 # The word approve anywhere in a reply lets it answer a request up to 12 hours old.
-APPROVE_ANY = re.compile(r"(?i)\bapprove[sd]?\b")
+APPROVE_ANY = re.compile(r"(?i)\b" + APPROVE_WORD + r"\b")
 NOTICES = ("<task-notification", "<system-reminder", "<command-", "<local-command", "<bash-", "<user-memory",
            "Another Claude session", "[SYSTEM NOTIFICATION")
 TIME = re.compile(r"(?i)(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\b")

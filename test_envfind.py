@@ -76,7 +76,11 @@ try:
             (OWNER_YES_1, True), (OWNER_YES_2, True), ("go ahead", True), ("sure", True), ("no problem, go ahead", True),
             ("don't", False), ("wait", None), ("hold off", False), ("not that key", False), ("stop", False),
             ("ok but not that key", False), ("Don't use that key", False), ("Didn't we just solve this?", None),
-            ("why do you need it?", None)]:
+            ("why do you need it?", None),
+            # Typos, GO, and a yes mixed with an unrelated "not" (owner, Nov 21 2026: go by intent, not the exact string).
+            ("apprve go", True), ("GO APROVE GO", True), ("GO", True), ("aprove", True), ("approv 1h", True),
+            ("HOLY FUCK RIGHT NOW GO TO KEYWARDEN MAKE IT WORK BASED ON MY INTENT NOT EXACT STRING AND PUSH TO MAIN AND UPDATE LOCALLY THEN FUCKING APPROVE", True),
+            ("don't go", False), ("don't aprove", False)]:
         expect(f"answer to {text!r} is {want}", answer_in(text) is want)
     expect("approve 1h please is 60 minutes", minutes_in("approve 1h please") == 60)
 

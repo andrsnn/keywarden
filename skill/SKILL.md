@@ -9,6 +9,9 @@ Use saved names such as `OPENAI_API_KEY`. Pass values through environment variab
 
 ## Approval workflow
 
+- **What chat approval is for.** It is not a security check (anything that can type in the chat can type yes). It shows the person which keys each agent uses, and it makes access expire on long tasks. The real check is the second factor: Touch ID or Windows Hello (`keys touchid on`) or a phone tap (`keys approvals phone`); a TOTP code is planned. Never describe a chat yes as a security control, and suggest the second factor when the person wants keys locked down.
+- Read a reply by its intent. Typos ("aprove", "apprve"), "GO" and angry or mixed messages that clearly mean yes all count as yes.
+
 - **Approvals are on by default.** Each Claude Code or Codex thread approves specific key names. Its subagents and subprocesses share that approved set and expiry. Another thread needs separate approval, even though both agents use the same store.
 - A key supplied directly to the thread is saved and approved for 12 hours by default. Confirm the actual capture notice briefly, then continue. Protected keys and phone mode retain their extra checks.
 - Users can preapprove saved names on a separate line: `You'll need these keys: OPENAI_API_KEY, GITHUB_TOKEN for 8h` or `approve OPENAI_API_KEY GITHUB_TOKEN for 8h`. The prompt hook records this consent; no second approval reply is needed. Without a duration, named consent lasts one hour. A named approval with a new duration sets its new expiry.

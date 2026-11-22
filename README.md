@@ -49,7 +49,9 @@ Agent: Use STRIPE_SECRET_KEY for this task?
 You: approve 30m
 ```
 
-Any clear yes works, in your own words: "ok, go ahead" or "sure, get it deployed". A clear no, like "no", "hold off" or "not that key", turns it down. A reply that doesn't answer, like a question, leaves the request waiting.
+Any clear yes works, in your own words and with typos: "ok, go ahead", "sure, get it deployed", "GO", "aprove". A clear no, like "no", "hold off" or "not that key", turns it down. A reply that doesn't answer, like a question, leaves the request waiting.
+
+**What a chat yes is for.** It is not a security check: anything that can type into the chat can type "yes". It gives you two things: you see which keys each agent is using, and access runs out, so a long task doesn't hold a key forever. For a real check, turn on Touch ID or Windows Hello (`keys touchid on`) or phone approval (`keys approvals phone`): then a key request waits for your fingerprint or a tap on your phone, which an agent or a prompt in a web page can't fake. A one-time code (TOTP) from an authenticator app is planned as a third option.
 
 **This helps with long context threads:** remembering that a key exists does not authorize its use. After compaction or resume, keywarden checks the current approval and expiry again. If an overnight task drifts into work needing another credential, it has to get your permission. This limits key access; it does not approve individual API calls or control how an approved key is used.
 
@@ -82,6 +84,8 @@ If the plugin cannot save and replace safely, it blocks the message with an acti
 </details>
 
 ## How the security layer works
+
+**Two layers.** Chat approval gives you visibility and expiry: which keys a thread uses, and for how long. The real gate is the second factor: Touch ID, Windows Hello or a phone tap (a TOTP code is planned). Turn one on for keys that matter.
 
 **Storage is shared. Approval is scoped to a thread and specific key names.** Claude and Codex see the same saved names, but approval in one thread does not approve another.
 
