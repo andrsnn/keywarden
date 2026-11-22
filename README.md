@@ -49,7 +49,7 @@ Agent: Use STRIPE_SECRET_KEY for this task?
 You: approve 30m
 ```
 
-Any clear yes works, in your own words and with typos: "ok, go ahead", "sure, get it deployed", "GO", "aprove". A clear no, like "no", "hold off" or "not that key", turns it down. A reply that doesn't answer, like a question, leaves the request waiting.
+A language model reads your reply, not a word list: Claude Haiku, through your own `claude` login, decides whether it says yes, no or neither. So any clear yes works, in your own words, with typos or other topics mixed in: "ok, go ahead", "GO", "aprove", "stop using the laptop, and I approve using a key". If no model can be reached, keywarden falls back to simple word matching. A clear no, like "no", "hold off" or "not that key", turns it down. A reply that doesn't answer, like a question, leaves the request waiting.
 
 **What a chat yes is for.** It is not a security check: anything that can type into the chat can type "yes". It gives you two things: you see which keys each agent is using, and access runs out, so a long task doesn't hold a key forever. For a real check, turn on Touch ID or Windows Hello (`keys touchid on`) or phone approval (`keys approvals phone`): then a key request waits for your fingerprint or a tap on your phone, which an agent or a prompt in a web page can't fake. A third option is a code from an authenticator app (`keys approvals totp`): a key request then waits until you type the app's current 6-digit code in the chat.
 

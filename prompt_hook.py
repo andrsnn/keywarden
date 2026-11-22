@@ -6,6 +6,7 @@ saved-name guidance, and attempt local transcript cleanup; the original prompt c
 Only messages submitted by the user handle later approval replies.
 """
 import json
+import os
 import re
 import sys
 import time
@@ -156,7 +157,7 @@ def totp_reply(text, data, named=""):
         span = approve.span(minutes or approve.settings()[2])
         tell_agent(f"{lead}keywarden: the person approved {', '.join(names)} for {span} with their authenticator "
                    "code. Run the command that asked for it again.")
-    answer = answer_in(text)
+    answer, _ = reply_answer(text, approve.pending(window, session))
     if answer is False:
         names = approve.answer_pending(False, max_age=window, session=session)
         tell_agent(f"{lead}keywarden: the person said no to {', '.join(names)}. Don't ask again.")
@@ -351,7 +352,19 @@ def rewrite():
     print(json.dumps(out))
 
 
+def reply_answer(text, requests):
+    """What the reply says about the waiting requests: True, False or None, and whether a model read it.
+    A language model reads it (intent.py). The word lists in answer_in are only the fallback when no model answers."""
+    try:
+        import intent
+        return intent.judge(text, requests), True
+    except BaseException:
+        return answer_in(text), False
+
+
 def main():
+    if os.environ.get("KEYWARDEN_INTENT_CALL"):
+        sys.exit(0)  # this is keywarden's own model call reading a reply; nothing to do
     if sys.argv[1:] == ["--rewrite"]:
         return rewrite()
     try:
@@ -395,9 +408,13 @@ def main():
             tell_agent(named)
         # The word approve (or no) answers a request from up to 12 hours ago. A loose yes or ok only
         # answers one from the last 30 minutes, so it can't grant an old request by accident.
-        answer = answer_in(text)
-        window = approve.APPROVE_WORD_MINUTES if APPROVE_ANY.search(text) or answer is False else approve.PENDING_MINUTES
         session = session_caller(data, AGENT) if data.get("session_id") else None
+        waiting = approve.pending(approve.APPROVE_WORD_MINUTES, session)
+        answer, by_model = reply_answer(text, waiting) if waiting else (None, False)
+        # A model's clear reading answers a request up to 12 hours old. The fallback word lists keep the old rule:
+        # the word approve (or a no) reaches 12 hours back, a loose yes only the last 30 minutes.
+        window = (approve.APPROVE_WORD_MINUTES if by_model or APPROVE_ANY.search(text) or answer is False
+                  else approve.PENDING_MINUTES)
         if answer is not None and approve.pending(window, session):
             if answer:
                 minutes = minutes_in(text)

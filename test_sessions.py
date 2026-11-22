@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+os.environ["KEYWARDEN_CLAUDE"] = "keywarden-no-model-in-tests"  # these cases check the word-list fallback; test_intent.py checks the model
 
 os.environ.pop("AGENT_KEYS_CALLER", None)  # run as a person at a terminal, not as the agent running the tests
 

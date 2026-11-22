@@ -10,7 +10,7 @@ Use saved names such as `OPENAI_API_KEY`. Pass values through environment variab
 ## Approval workflow
 
 - **What chat approval is for.** It is not a security check (anything that can type in the chat can type yes). It shows the person which keys each agent uses, and it makes access expire on long tasks. The real check is the second factor: Touch ID or Windows Hello (`keys touchid on`) a phone tap (`keys approvals phone`), or the 6-digit code from an authenticator app (`keys approvals totp`). Never describe a chat yes as a security control, and suggest the second factor when the person wants keys locked down.
-- Read a reply by its intent. Typos ("aprove", "apprve"), "GO" and angry or mixed messages that clearly mean yes all count as yes.
+- A language model (Claude Haiku via the local `claude` command) reads the person's reply to a key request and decides yes, no or unclear; word matching is only the fallback when no model answers. Typos, "GO" and angry or mixed messages that clearly mean yes count as yes.
 
 - **Approvals are on by default.** Each Claude Code or Codex thread approves specific key names. Its subagents and subprocesses share that approved set and expiry. Another thread needs separate approval, even though both agents use the same store.
 - A key supplied directly to the thread is saved and approved for 12 hours by default. Confirm the actual capture notice briefly, then continue. Protected keys and phone mode retain their extra checks.

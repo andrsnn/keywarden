@@ -28,6 +28,7 @@ import totp  # noqa: E402
 
 FAKE_OP = r'''
 import json, os, sys
+os.environ["KEYWARDEN_CLAUDE"] = "keywarden-no-model-in-tests"  # these cases check the word-list fallback; test_intent.py checks the model
 a = sys.argv[1:]
 if os.environ.get("FAKE_OP_STATE") == "signed-out":
     sys.stderr.write("[ERROR] You are not currently signed in. Please run `op signin --help` for instructions")

@@ -98,6 +98,8 @@ if keys.key_in('client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])'):
 # Claude Code logs a blocked message after the hook returns; scrub_in_place blanks the key without moving bytes.
 import tempfile
 from pathlib import Path
+import os
+os.environ["KEYWARDEN_CLAUDE"] = "keywarden-no-model-in-tests"  # these cases check the word-list fallback; test_intent.py checks the model
 fake = rand(30)
 log = Path(tempfile.mkdtemp()) / "session.jsonl"
 before = f'{{"a":1}}\n{{"content":"Original prompt: save this as X: {fake}"}}\n'
