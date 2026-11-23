@@ -15,6 +15,8 @@ os.environ.pop("AGENT_KEYS_CALLER", None)  # run as a person at a terminal, not 
 
 HERE = Path(__file__).resolve().parent
 tmp = Path(tempfile.mkdtemp(prefix="agent-keys-touchid-"))
+import fake_model  # noqa: E402  a stand-in for the model that reads chat replies; test_intent.py checks the real call
+os.environ["KEYWARDEN_CLAUDE"], FAKE_MODEL = fake_model.install_temp()
 env = dict(os.environ, AGENT_KEYS_STATE=str(tmp), AGENT_KEYS_NS="agent-keys-touchidtest")
 env.pop("AGENT_KEYS_BACKEND", None)
 ANSWER, CALLS = tmp / "answer.txt", tmp / "calls.txt"

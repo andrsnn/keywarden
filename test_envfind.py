@@ -9,7 +9,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-os.environ["KEYWARDEN_CLAUDE"] = "keywarden-no-model-in-tests"  # these cases check the word-list fallback; test_intent.py checks the model
+import fake_model  # noqa: E402  a stand-in for the model that reads chat replies; test_intent.py checks the real call
+os.environ["KEYWARDEN_CLAUDE"], FAKE_MODEL = fake_model.install_temp()
 
 os.environ.pop("AGENT_KEYS_CALLER", None)  # run as a person at a terminal, not as the agent running the tests
 
@@ -65,26 +66,7 @@ def meta(name):
 
 
 try:
-    # F1: the word approve anywhere in a short reply answers the waiting request.
-    sys.path.insert(0, str(HERE))
-    from prompt_hook import answer_in, minutes_in
-    for text, want in [("It's on disk approve", True), ("approve 1h please", True), ("yes approve", True),
-                       ("Approved", True), ("ok it's there now, approve 8h", True), ("approve", True), ("yes", True),
-                       ("don't approve", False), ("do not approve that", False), ("no", False), ("deny", False),
-                       ("I don't approve of this", False), ("approve it, no wait", None),
-                       ("what are you doing?", None), ("fix the bug in a.ts", None)] + [
-            # Any reply with a clear yes approves, with or without the word approve. These are the owner's own replies.
-            (OWNER_YES_1, True), (OWNER_YES_2, True), ("go ahead", True), ("sure", True), ("no problem, go ahead", True),
-            ("don't", False), ("wait", None), ("hold off", False), ("not that key", False), ("stop", False),
-            ("ok but not that key", False), ("Don't use that key", False), ("Didn't we just solve this?", None),
-            ("why do you need it?", None),
-            # Typos, GO, and a yes mixed with an unrelated "not" (owner, Nov 21 2026: go by intent, not the exact string).
-            ("apprve go", True), ("GO APROVE GO", True), ("GO", True), ("aprove", True), ("approv 1h", True),
-            ("HOLY FUCK RIGHT NOW GO TO KEYWARDEN MAKE IT WORK BASED ON MY INTENT NOT EXACT STRING AND PUSH TO MAIN AND UPDATE LOCALLY THEN FUCKING APPROVE", True),
-            ("don't go", False), ("don't aprove", False)]:
-        expect(f"answer to {text!r} is {want}", answer_in(text) is want)
-    expect("approve 1h please is 60 minutes", minutes_in("approve 1h please") == 60)
-
+    # F1: a reply that the model reads as yes answers the waiting request (fake_model.py stands in for the model).
     keys("setup", "local")
     keys("approvals", "on")
     proc = subprocess.run([sys.executable, str(HERE / "keys.py"), "add", "SAVED_TEST_KEY"], input=fake(),

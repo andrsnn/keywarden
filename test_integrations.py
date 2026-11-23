@@ -20,7 +20,8 @@ from unittest.mock import patch
 import hook
 import install
 from test_backends import FAKE_OP
-os.environ["KEYWARDEN_CLAUDE"] = "keywarden-no-model-in-tests"  # these cases check the word-list fallback; test_intent.py checks the model
+import fake_model  # noqa: E402  a stand-in for the model that reads chat replies; test_intent.py checks the real call
+os.environ["KEYWARDEN_CLAUDE"], FAKE_MODEL = fake_model.install_temp()
 
 os.environ.pop("AGENT_KEYS_CALLER", None)  # run as a person at a terminal, not as the agent running the tests
 

@@ -99,7 +99,8 @@ if keys.key_in('client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])'):
 import tempfile
 from pathlib import Path
 import os
-os.environ["KEYWARDEN_CLAUDE"] = "keywarden-no-model-in-tests"  # these cases check the word-list fallback; test_intent.py checks the model
+import fake_model  # noqa: E402  a stand-in for the model that reads chat replies; test_intent.py checks the real call
+os.environ["KEYWARDEN_CLAUDE"], FAKE_MODEL = fake_model.install_temp()
 fake = rand(30)
 log = Path(tempfile.mkdtemp()) / "session.jsonl"
 before = f'{{"a":1}}\n{{"content":"Original prompt: save this as X: {fake}"}}\n'

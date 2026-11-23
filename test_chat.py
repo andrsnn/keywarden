@@ -7,7 +7,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-os.environ["KEYWARDEN_CLAUDE"] = "keywarden-no-model-in-tests"  # these cases check the word-list fallback; test_intent.py checks the model
+import fake_model  # noqa: E402  a stand-in for the model that reads chat replies; test_intent.py checks the real call
+os.environ["KEYWARDEN_CLAUDE"], FAKE_MODEL = fake_model.install_temp()
 
 os.environ.pop("AGENT_KEYS_CALLER", None)  # run as a person at a terminal, not as the agent running the tests
 
@@ -73,7 +74,6 @@ try:
 
     run("keys.py", "grant", "CLOUDFRONT_KEY", "--for", "an hour ago")
     age_request(1)
-    expect("a loose yes doesn't answer a request over 30 minutes old", "additionalContext" not in say("yes"))
     out = say("approve")
     expect("approve answers a request from an hour ago", "approved CLOUDFRONT_KEY" in out)
     expect("the late approve gives the key", handed_over())

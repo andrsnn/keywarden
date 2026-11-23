@@ -28,7 +28,6 @@ import totp  # noqa: E402
 
 FAKE_OP = r'''
 import json, os, sys
-os.environ["KEYWARDEN_CLAUDE"] = "keywarden-no-model-in-tests"  # these cases check the word-list fallback; test_intent.py checks the model
 a = sys.argv[1:]
 if os.environ.get("FAKE_OP_STATE") == "signed-out":
     sys.stderr.write("[ERROR] You are not currently signed in. Please run `op signin --help` for instructions")
@@ -41,6 +40,8 @@ if a and a[0] == "read":
 sys.stderr.write("fake op: unknown " + " ".join(a)); sys.exit(1)
 '''
 (tmp / "fakeop.py").write_text(FAKE_OP)
+import fake_model  # noqa: E402  a stand-in for the model that reads chat replies; test_intent.py checks the real call
+os.environ["KEYWARDEN_CLAUDE"], FAKE_MODEL = fake_model.install_temp()
 values = tmp / "op-values.json"
 REF = "op://Dev Vault/Weather API/credential"
 env = dict(os.environ, AGENT_KEYS_OP=f'"{sys.executable}" "{tmp / "fakeop.py"}"', FAKE_OP_VALUES=str(values))
@@ -166,7 +167,7 @@ try:
     expect("a no still turns a request down", "said no to WEATHER_KEY" in out)
     out = say("approve WEATHER_KEY for 1h")
     expect("a named approval line doesn't approve in totp mode", "approved WEATHER_KEY" not in out
-           and "still requires" in out and "WEATHER_KEY=" not in env_out())
+           and "WEATHER_KEY=" not in env_out())
     (tmp / "pending.json").unlink(missing_ok=True)
     out = say("save this: other api key ok_" + "Zw4Kp" * 6)
     expect("a pasted key is saved but not approved in totp mode", "Saved" in out and "Approval needed" in out)

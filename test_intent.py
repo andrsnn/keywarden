@@ -1,5 +1,6 @@
-"""intent.py: the model's one-word answer is parsed right, and a missing or broken model raises Unavailable so the
-hook falls back to the word lists. Uses a fake `claude` command, so it runs offline."""
+"""intent.py: the model's answer is parsed right, the prompt carries the rules and the session's state, and a
+missing or broken model raises Unavailable so the hook changes nothing. Uses a fake `claude` command, so it runs
+offline."""
 import os
 import sys
 import tempfile
@@ -56,14 +57,22 @@ try:
 except intent.Unavailable:
     expect("missing claude raises Unavailable", True)
 
-# The hook falls back to the word lists when the model can't answer.
-import prompt_hook  # noqa: E402
-answer, by_model = prompt_hook.reply_answer("yes", reqs)
-expect("fallback answers yes", answer is True and by_model is False)
-os.environ["KEYWARDEN_CLAUDE"] = fake("NO")
-answer, by_model = prompt_hook.reply_answer("yes", reqs)
-expect("model wins over the word lists", answer is False and by_model is True)
+os.environ["KEYWARDEN_CLAUDE"] = fake('{"answer": "YES", "minutes": 120, "keys": ["EXAMPLE_KEY"]}')
+expect("a JSON answer gives the minutes and the named keys",
+       intent.read("anything", reqs) == {"answer": True, "minutes": 120.0, "keys": ["EXAMPLE_KEY"]})
+os.environ["KEYWARDEN_CLAUDE"] = fake('{"answer": "YES", "minutes": 0, "keys": ["EXAMPLE_KEY"]}')
+expect("approve for 0 minutes approves nothing", intent.read("anything", reqs)["answer"] is None)
 
+import prompt_hook  # noqa: E402
+expect("the hook has no word lists left", not any(hasattr(prompt_hook, n) for n in (
+    "answer_in", "approve_word_yes", "reply_answer", "STOP", "YES_START", "REFUSE", "NAMED_APPROVAL", "minutes_in")))
+
+idle = intent._prompt("Stop agent that one too quickly.", [], held=True)
+expect("the prompt says when nothing is waiting", "No key request is waiting" in idle)
+expect("the prompt says when the session holds an approval", "already approved key use for this session" in idle)
+expect("the prompt says when it holds none", "holds no key approval" in intent._prompt("hi", reqs))
+expect("the prompt says a stop about other work is UNCLEAR", "stop the build, wrong branch" in idle
+       and "explicitly withdraws permission" in idle)
 expect("the prompt carries the key names", "EXAMPLE_KEY" in intent._prompt("hi", reqs))
 print(f"{ok}/{ok + fail} intent cases right")
 sys.exit(1 if fail else 0)

@@ -1,6 +1,7 @@
 """Run: python test_standing.py   One approve in the chat covers the session: a yes sent before any request, a yes
 that answers a request, and how long it lasts. A no or stop ends it, other sessions stay uncovered, protected keys
-keep their tap, and the model sees the agent's last message. Uses a test key store and a fake `claude` command."""
+keep their tap, and the model sees the agent's last message. A "stop" about other work leaves the approval alone,
+and when no model answers nothing changes. Uses a test key store and a fake `claude` command (fake_model.py)."""
 import json
 import os
 import re
@@ -19,30 +20,23 @@ base = dict(os.environ, AGENT_KEYS_STATE=str(tmp), AGENT_KEYS_NS="agent-keys-sta
 base.pop("AGENT_KEYS_BACKEND", None)
 ok, bad = [], []
 
-# A fake `claude` command: it answers with the word in answer.txt and keeps the prompt it was given.
+# A fake `claude` command (fake_model.py): it answers from its table, or with the answer forced by model().
+import fake_model  # noqa: E402
 FAKE = tmp / "fake"
-FAKE.mkdir()
-(FAKE / "fake_claude.py").write_text(
-    "import sys, pathlib\nd = pathlib.Path(__file__).parent\n"
-    "(d / 'prompt.txt').write_text(sys.stdin.read(), encoding='utf-8')\n"
-    "print((d / 'answer.txt').read_text().strip())\n")
-if os.name == "nt":
-    FAKE_EXE = FAKE / "claude.cmd"
-    FAKE_EXE.write_text(f'@"{sys.executable}" "{FAKE / "fake_claude.py"}" %*\n')
-else:
-    FAKE_EXE = FAKE / "claude"
-    FAKE_EXE.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE / "fake_claude.py"}" "$@"\n')
-    FAKE_EXE.chmod(0o755)
+FAKE_EXE = fake_model.install(FAKE, {"approve, approve, go, go": "YES", "go, go": "YES"})
+base["KEYWARDEN_CLAUDE"] = FAKE_EXE
 
 
 def model(answer):
-    """None: no model answers (word-list fallback). Otherwise the fake model says this word."""
-    if answer is None:
-        base["KEYWARDEN_CLAUDE"] = str(tmp / "no-model-here.exe")
-    else:
-        (FAKE / "answer.txt").write_text(answer)
-        (FAKE / "prompt.txt").unlink(missing_ok=True)
-        base["KEYWARDEN_CLAUDE"] = str(FAKE_EXE)
+    """None: the fake model answers from its table. Otherwise it gives every message this answer."""
+    fake_model.force(FAKE, answer)
+    (FAKE / "prompt.txt").unlink(missing_ok=True)
+    base["KEYWARDEN_CLAUDE"] = FAKE_EXE
+
+
+def no_model():
+    """No model can be reached."""
+    base["KEYWARDEN_CLAUDE"] = str(tmp / "no-model-here.exe")
 
 
 def run(script, *args, stdin=None, token=None):
@@ -134,7 +128,7 @@ try:
     run("keys.py", "add", "VAULT_TOKEN", stdin="vt_" + "Hh3kP" * 6)
     s1, s1_sub, s2 = token("S1"), token("S1", "A1"), token("S2")
 
-    # 1. approve sent before the request (no model: the word approve counts)
+    # 1. approve sent before the request
     out = say("approve", "S1")
     expect("approve with nothing waiting is taken as approval in advance", "approved key use in advance" in out)
     expect("the advance approval lasts 12 hours", "12 hours" in out)
@@ -169,7 +163,7 @@ try:
     code, out = grant(s1, "WEATHER_API_KEY")
     expect("the ask tells the agent one approve covers the session", "covers every saved key" in out)
     out = say("approve, approve, go, go", "S1")
-    expect("'approve, approve, go, go' approves (word lists)", "approved WEATHER_API_KEY for 12 hours" in out)
+    expect("'approve, approve, go, go' approves", "approved WEATHER_API_KEY for 12 hours" in out)
     code, out = grant(s1, "MAPS_API_KEY")
     expect("a different key later in the session goes straight through", code == 0 and holds(s1, "MAPS_API_KEY"))
     expect("use.log says the approve covered it", "covered by an approve in the chat" in use_log())
@@ -181,38 +175,56 @@ try:
     out = say("approve, approve, go, go", "S1")
     expect("'approve, approve, go, go' approves (model)", "approved WEATHER_API_KEY" in out)
 
-    # 4. a yes inside a complaint, right after a request, even when the model isn't sure
+    # 4. a yes inside a complaint, right after a request: the model's reading decides
+    reset()
+    grant(s1, "WEATHER_API_KEY")
+    model("YES")
+    out = say("I keep saying approve, it's not working, please fix", "S1")
+    expect("approve inside a complaint approves when the model reads it as yes", "approved WEATHER_API_KEY" in out)
     reset()
     grant(s1, "WEATHER_API_KEY")
     model("UNCLEAR")
-    out = say("I keep saying approve, it's not working, please fix", "S1")
-    expect("approve inside a complaint approves when the model says unclear", "approved WEATHER_API_KEY" in out)
-    reset()
-    grant(s1, "WEATHER_API_KEY")
-    out = say("I keep saying approve, it's not working, please fix", "S1")
-    expect("approve inside a complaint approves (word lists)", "approved WEATHER_API_KEY" in out)
+    out = say("fix the approve flow", "S1")
+    expect("the word approve alone doesn't approve when the model says unclear", "approved" not in out
+           and not holds(s1, "WEATHER_API_KEY"))
     reset()
     grant(s1, "WEATHER_API_KEY")
     model("NO")
     out = say("don't approve that", "S1")
     expect("a real no to a request still says no", "said no to WEATHER_API_KEY" in out)
 
-    # 5. no and stop end the standing approval
+    # 5. only a clear withdrawal of key permission ends the standing approval; a stop about other work doesn't
+    for text in ("Stop agent that one too quickly.", "stop the build, wrong branch"):
+        reset()
+        say("approve", "S1")
+        grant(s1, "WEATHER_API_KEY")
+        model("UNCLEAR")
+        out = say(text, "S1")
+        expect(f"{text!r} keeps the standing approval", "approvals ended" not in out
+               and holds(s1, "WEATHER_API_KEY") and "S1" in standing())
+        prompt = fake_model.last_prompt(FAKE)
+        expect(f"{text!r}: the model is told nothing is waiting and an approval is in place",
+               "No key request is waiting" in prompt and "already approved key use for this session" in prompt)
+        code, out = grant(s1, "MAPS_API_KEY")
+        expect(f"after {text!r}, the next grant still goes straight through", code == 0)
     reset()
     say("approve", "S1")
     grant(s1, "WEATHER_API_KEY")
-    out = say("no", "S1")
-    expect("no ends the session's approval", "approvals ended" in out and not holds(s1, "WEATHER_API_KEY")
-           and "S1" not in standing())
+    model("NO")
+    out = say("no, don't use the keys", "S1")
+    expect("'no, don't use the keys' ends the session's approval", "approvals ended" in out
+           and not holds(s1, "WEATHER_API_KEY") and "S1" not in standing())
     code, out = grant(s1, "MAPS_API_KEY")
-    expect("after no, the next grant asks again", code != 0 and "Reply approve" in out)
+    expect("after it, the next grant asks again", code != 0 and "Reply approve" in out)
     reset()
     say("approve", "S1")
     say("approve", "S2")
     grant(s1, "WEATHER_API_KEY")
-    out = say("stop", "S1")
-    expect("stop ends the session's approval", "approvals ended" in out and not holds(s1, "WEATHER_API_KEY"))
-    expect("stop in one session leaves the other session's approval", "S2" in standing())
+    model("NO")
+    out = say("revoke the keys", "S1")
+    expect("'revoke the keys' ends the session's approval", "approvals ended" in out
+           and not holds(s1, "WEATHER_API_KEY") and "S1" not in standing())
+    expect("a revoke in one session leaves the other session's approval", "S2" in standing())
     reset()
     say("approve", "S1")
     grant(s1, "WEATHER_API_KEY")
@@ -222,37 +234,51 @@ try:
            and "S1" in standing())
     reset()
     grant(s1, "WEATHER_API_KEY")
-    say("no", "S1")
-    expect("no to a request leaves no standing approval", "S1" not in standing())
+    model("NO")
+    out = say("no", "S1")
+    expect("a bare no with a request waiting denies that request", "said no to WEATHER_API_KEY" in out
+           and not holds(s1, "WEATHER_API_KEY") and "S1" not in standing())
+    expect("the model is told the request is waiting", "WEATHER_API_KEY: standing test" in fake_model.last_prompt(FAKE))
     reset()
     say("approve", "S1")
     run("keys.py", "lock", token=s1)
     code, out = grant(s1, "WEATHER_API_KEY")
     expect("keys lock in the session ends the standing approval", code != 0 and "Reply approve" in out)
 
+    # 5b. no model: nothing changes, and the agent is told
+    reset()
+    say("approve", "S1")
+    grant(s1, "WEATHER_API_KEY")
+    before = standing()
+    no_model()
+    out = say("no, don't use the keys", "S1")
+    expect("no model: the standing approval and grants stay", standing() == before and holds(s1, "WEATHER_API_KEY"))
+    expect("no model: the agent is told nothing changed", "couldn't be reached" in out
+           and "changed no key approvals" in out)
+    reset()
+    grant(s1, "MAPS_API_KEY")
+    no_model()
+    out = say("approve", "S1")
+    expect("no model: a waiting request stays waiting", "couldn't be reached" in out
+           and not holds(s1, "MAPS_API_KEY") and json.loads((tmp / "pending.json").read_text()))
+    reset()
+    no_model()
+    out = say("approve", "S1")
+    expect("no model: nothing is approved in advance", not standing() and "couldn't be reached" in out)
+
     # 6. the model sees the agent's last message
     reset()
     model("YES")
     log = transcript("Status: the deploy is ready. I need R2_SECRET and WEATHER_API_KEY. Reply approve.")
     out = say("go, go", "S1", log)
-    prompt = (FAKE / "prompt.txt").read_text(encoding="utf-8") if (FAKE / "prompt.txt").exists() else ""
+    prompt = fake_model.last_prompt(FAKE)
     expect("the model is given the agent's last message", "I need R2_SECRET and WEATHER_API_KEY" in prompt
            and "a subagent's own message" not in prompt)
     expect("'go, go' after the agent asked for keys approves in advance", "approved key use in advance" in out)
     reset()
-    model("YES")
-    out = say("yes", "S1")
-    expect("a plain yes with no key ask in view does nothing", "additionalContext" not in out)
-    reset()
     model("UNCLEAR")
     out = say("fix the approve flow in the settings page", "S1", transcript("I changed the settings page."))
     expect("a message that only mentions approve doesn't approve", "additionalContext" not in out and not standing())
-    reset()
-    model("UNCLEAR")
-    out = say("I keep saying approve, it's not working, please fix", "S1",
-              transcript("I need WEATHER_API_KEY to upload the build. Reply approve."))
-    expect("a complaint with approve after the agent asked for keys approves in advance",
-           "approved key use in advance" in out)
     reset()
     import prompt_hook
     codex_log = tmp / "codex.jsonl"

@@ -9,6 +9,9 @@ from pathlib import Path
 os.environ.pop("AGENT_KEYS_CALLER", None)  # run as a person at a terminal, not as the agent running the tests
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import fake_model  # noqa: E402  suites that don't set their own stand-in model never call the real one
+os.environ["KEYWARDEN_CLAUDE"], _ = fake_model.install_temp()
 
 
 def main():
