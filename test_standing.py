@@ -89,6 +89,22 @@ def shift_standing(session, hours):
     (tmp / "standing.json").write_text(json.dumps(table))
 
 
+def shift_grants(session, hours):
+    """Make the session's grants run out `hours` sooner."""
+    a = json.loads((tmp / "grants.json").read_text())
+    for n in a["callers"][session]:
+        a["callers"][session][n] -= hours * 3600
+    (tmp / "grants.json").write_text(json.dumps(a))
+
+
+def left(session, name):
+    """Seconds left on the session's grant of `name`, or 0."""
+    try:
+        return json.loads((tmp / "grants.json").read_text())["callers"][session].get(name, time.time()) - time.time()
+    except Exception:
+        return 0
+
+
 def use_log():
     try:
         return (tmp / "use.log").read_text(encoding="utf-8")
@@ -241,9 +257,51 @@ try:
     expect("the model is told the request is waiting", "WEATHER_API_KEY: standing test" in fake_model.last_prompt(FAKE))
     reset()
     say("approve", "S1")
-    run("keys.py", "lock", token=s1)
+    grant(s1, "WEATHER_API_KEY")
+    code, out = run("keys.py", "lock", token=s1)
+    expect("keys lock in the session clears its grants", not holds(s1, "WEATHER_API_KEY"))
+    expect("keys lock in the session keeps the person's standing approval", "S1" in standing()
+           and "still holds" in out)
     code, out = grant(s1, "WEATHER_API_KEY")
-    expect("keys lock in the session ends the standing approval", code != 0 and "Reply approve" in out)
+    expect("after an agent's keys lock, the next grant goes straight through", code == 0
+           and holds(s1, "WEATHER_API_KEY"))
+    run("keys.py", "lock")
+    expect("keys lock from the person's terminal ends the standing approval", "S1" not in standing())
+
+    # 5a. the Nov 23 sequence: approve, grants near their end, approve again, grant, lock, grant
+    reset()
+    say("approve", "S1")
+    grant(s1, "WEATHER_API_KEY", "MAPS_API_KEY")
+    shift_standing("S1", 11.83)
+    shift_grants("S1", 11.83)
+    expect("set-up: the grants have about 10 minutes left", 5 * 60 < left("S1", "WEATHER_API_KEY") < 15 * 60)
+    model("YES")
+    out = say("and spritely you are approved", "S1")
+    expect("a new approve renews the standing approval for 12 hours", "12 hours" in out
+           and standing()["S1"]["until"] - time.time() > 11.9 * 3600)
+    expect("a new approve renews the grants the session already holds", left("S1", "WEATHER_API_KEY") > 11.9 * 3600
+           and left("S1", "MAPS_API_KEY") > 11.9 * 3600)
+    # grants with 10 minutes left while the standing approval still has hours left
+    (tmp / "grants.json").write_text(json.dumps({"callers": {"S1": {
+        "WEATHER_API_KEY": time.time() + 600, "MAPS_API_KEY": time.time() + 600}}}))
+    code, out = grant(s1, "WEATHER_API_KEY")
+    expect("keys grant under a standing approval renews a grant near its end", code == 0
+           and left("S1", "WEATHER_API_KEY") > 11.9 * 3600)
+    expect("use.log says the grant was renewed", "renewed by the approve in the chat" in use_log())
+    expect("keys grant renews only the keys it names", left("S1", "MAPS_API_KEY") < 15 * 60)
+    run("keys.py", "lock", token=s1)
+    code, out = grant(s1, "WEATHER_API_KEY", "MAPS_API_KEY")
+    expect("after lock, the next grant goes straight through without a new approve", code == 0
+           and "Reply approve" not in out and holds(s1, "MAPS_API_KEY") and left("S1", "MAPS_API_KEY") > 11.9 * 3600)
+    cfg = json.loads((tmp / "config.json").read_text())
+    (tmp / "config.json").write_text(json.dumps(dict(cfg, protected=["VAULT_TOKEN"])))
+    reset()
+    say("approve", "S1")
+    # stand-in for the tap: a grant of the protected key with 10 minutes left
+    (tmp / "grants.json").write_text(json.dumps({"callers": {"S1": {"VAULT_TOKEN": time.time() + 600}}}))
+    grant(s1, "VAULT_TOKEN")
+    expect("a protected key is not renewed by the standing approval", left("S1", "VAULT_TOKEN") < 15 * 60)
+    (tmp / "config.json").write_text(json.dumps(cfg))
 
     # 5b. no model: nothing changes, and the agent is told
     reset()

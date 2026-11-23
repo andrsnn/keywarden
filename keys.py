@@ -29,7 +29,7 @@
   keys run NAME [VAR=NAME] -- CMD   run CMD with those keys set as environment variables
   keys grant NAME --for WHY         ask for approval; a NAME that isn't saved is looked for in .env files
   keys status                       how long the current approval lasts
-  keys lock                         end the current approval now
+  keys lock                         clear this session's grants (from your terminal: everyone's)
   keys rescue [--save] [--redact]   find keys pasted into Claude chat logs, save them, scrub the logs
 """
 import getpass
@@ -926,11 +926,15 @@ def cmd_env(args):
     print(f"$env:AGENT_KEYS_NAMES = '{','.join(loaded)}'" if ps else f"export AGENT_KEYS_NAMES={','.join(loaded)}")
 
 
+def mode_is_chat():
+    return approve.settings()[0] == "chat"
+
+
 def cmd_lock(args):
     """keys lock [NAME ...]: from an agent, ends that session's approvals. From a terminal, ends everyone's."""
     names = [norm_name(a) for a in args]
     who = approve.caller()
-    approve.lock(names or None, "all" if who == approve.TERMINAL else who)
+    approve.lock(names or None, "all" if who == approve.TERMINAL else who, keep_standing=who != approve.TERMINAL)
     if store_now().kind == "1password":
         if approve.all_granted():
             stores.cache_fill(store_now(), approve.all_granted())
@@ -940,6 +944,10 @@ def cmd_lock(args):
     if approve.settings()[0] == "auto":
         print(f"Cleared grants in {scope}. Approvals are off, so ordinary keys remain available automatically. "
               "Run keys approvals on to require approval.")
+    elif who != approve.TERMINAL and approve.standing(who) and mode_is_chat():
+        print(f"Cleared {', '.join(names) if names else 'every key'} in this session. The person's approve in the chat "
+              f"still holds for {approve._left_span(who)}, so the next keys grant goes straight through. Only the "
+              "person can withdraw it.")
     else:
         print(f"Done. {', '.join(names) if names else 'Every key'} will ask for approval again in {scope}.")
 

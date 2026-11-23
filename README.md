@@ -51,7 +51,7 @@ You: approve 30m
 
 A language model reads your reply, not a word list: Claude Haiku, through your own `claude` login, decides whether it says yes, no or neither. So any clear yes works, in your own words, with typos or other topics mixed in: "ok, go ahead", "GO", "aprove", "stop using the laptop, and I approve using a key". There is no word matching. If no model can be reached, the message changes nothing: no approval, no refusal, and an approval you already gave stays in place. The agent is told so. A clear no, like "no", "hold off" or "not that key", turns it down. A reply that doesn't answer, like a question, leaves the request waiting. The model also sees the agent's last message, so "approve, go" after a status message that lists the keys counts as a yes.
 
-**One approve covers the thread.** A yes in the chat lasts 12 hours, or the time you name, like `approve 1h`. In that time, every saved key the thread or its helpers ask for goes straight through, except keys you protected with `keys protect`. If you say approve before the agent has asked, that counts too: its next `keys grant` goes through. When nothing is waiting, only a message that takes back permission for the keys, like "don't use the keys" or "revoke the keys", ends the thread's approval. A "stop" about other work, like "stop the build", leaves it in place. Other threads still ask on their own.
+**One approve covers the thread.** A yes in the chat lasts 12 hours, or the time you name, like `approve 1h`. In that time, every saved key the thread or its helpers ask for goes straight through, except keys you protected with `keys protect`. If you say approve before the agent has asked, that counts too: its next `keys grant` goes through. Keys the thread already holds run to the end of your approve, so a grant made hours ago doesn't run out first, and a new approve starts a fresh 12 hours for them too. When nothing is waiting, only a message that takes back permission for the keys, like "don't use the keys" or "revoke the keys", ends the thread's approval. A "stop" about other work, like "stop the build", leaves it in place. Other threads still ask on their own.
 
 **What a chat yes is for.** It is not a security check: anything that can type into the chat can type "yes". It gives you two things: you see which keys each agent is using, and access runs out, so a long task doesn't hold a key forever. For a real check, turn on Touch ID or Windows Hello (`keys touchid on`) or phone approval (`keys approvals phone`): then a key request waits for your fingerprint or a tap on your phone, which an agent or a prompt in a web page can't fake. A third option is a code from an authenticator app (`keys approvals totp`): a key request then waits until you type the app's current 6-digit code in the chat.
 
@@ -103,7 +103,7 @@ flowchart LR
 1. **Identify the thread.** Hooks use the parent session ID supplied by Claude Code or Codex. Main-agent and subagent commands get the same caller token; subprocesses inherit it and the environment.
 2. **Check names and expiry.** keywarden reads current grants from disk. An old message in a long context, a remembered key name, or compaction does not create or renew access.
 3. **Load approved values.** Hooked commands receive the approved keys. Unapproved keys remain in the store. Delegation shares the approved set and its expiry; it does not expand that set or extend the timer.
-4. **Expire or lock.** Expiry stops future loading. `keys lock` from the thread or a subagent clears that whole thread's grants; your terminal can clear everyone's. Common attempts to change or clear the caller token are blocked.
+4. **Expire or lock.** Expiry stops future loading. `keys lock` from the thread or a subagent clears that whole thread's grants, but your approve in the chat stays: only you can withdraw it. Your terminal can clear everyone's grants and approvals. Common attempts to change or clear the caller token are blocked.
 
 This is hook-enforced **thread binding**, not OS process isolation. Programs run with your account. Child processes can inherit values, and expiry or locking cannot erase credentials a running process already received. A separately launched Claude/Codex thread needs separate approval. Access is not scoped to a project or API endpoint, and these guardrails cannot stop malicious code running as you.
 
@@ -199,7 +199,7 @@ keywarden saves the path, not the key. Each time the key is used, through `keys 
 | `keys touchid on` / `off` / `test` | Approve requests with Touch ID (Windows Hello on Windows) instead of the chat. |
 | `keys totp setup` / `test`, `keys approvals totp` | Approve requests with the 6-digit code from an authenticator app. |
 | `keys add NAME --op op://Vault/Item/field` | Save a 1Password reference. The value is read from 1Password each time the key is used. |
-| `keys lock [NAME ...]` | Revoke future loading for this thread and its helpers; from your terminal, revoke for all threads. |
+| `keys lock [NAME ...]` | Clear this thread's grants and its helpers' (your approve in the chat stays); from your terminal, clear every thread's grants and approvals. |
 | `keys note NAME "description"` | Tell agents what a key is for. |
 | `keys add NAME --clipboard` | Save a copied key without pasting into chat. |
 | `keys import FILE.env` | Save every key in an existing file. |

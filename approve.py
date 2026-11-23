@@ -340,6 +340,7 @@ def set_standing(who, minutes, advance):
     until = time.time() + minutes * 60
     table[who] = {"until": until, "at": time.time(), "advance": advance}
     _save(STANDING, table)
+    _renew(sorted(_all().get(who, {})), "a new approve in the chat", who)
     return until
 
 
@@ -438,6 +439,20 @@ def _covered(names, what, who):
     return ok
 
 
+def _renew(names, what, who):
+    """Keys this session already holds run to the end of its standing chat approval, so a grant made hours ago
+    doesn't run out while the person's approve still holds. Protected keys keep their own end."""
+    st = standing(who)
+    if not st or settings()[0] != "chat":
+        return []
+    g = grants(who)
+    late = sorted(n for n in set(names) - settings()[1] if n in g and g[n] < st["until"])
+    if late:
+        _set(late, st["until"], who)
+        log_use(late, what, f"renewed by the approve in the chat, {_left_span(who)} left ({thread_scope(who)})")
+    return late
+
+
 def _left_span(who):
     st = standing(who)
     return span(max(1, round((st["until"] - time.time()) / 60))) if st else "a while"
@@ -485,6 +500,8 @@ def ask(names, what, minutes=60, timeout=300, force=False):
     approves for `minutes`. The approval covers only these keys.
     """
     who = caller()
+    if not force:  # under a standing chat approval, keys already held are renewed to its end
+        _renew(names, what, who)
     need = granted(names, who)
     if not need:
         return True
@@ -656,8 +673,10 @@ def _unlock_1password(names, what, who, minutes):
     return list(names)
 
 
-def lock(names=None, who="all"):
-    """End the approval for these keys (or every key), for one caller or for every caller."""
+def lock(names=None, who="all", keep_standing=False):
+    """End the approval for these keys (or every key), for one caller or for every caller. keep_standing leaves the
+    person's standing chat approval in place: an agent's keys lock clears its grants, but the approve is the
+    person's to withdraw."""
     a = _all()
     for c in list(a):
         if who != "all" and thread_scope(c) != thread_scope(who):
@@ -669,5 +688,5 @@ def lock(names=None, who="all"):
         _save(GRANTS, {"callers": a})
     else:
         GRANTS.unlink(missing_ok=True)
-    if not names:  # locking every key also ends the standing chat approval, so the next ask asks again
+    if not names and not keep_standing:  # the person locking every key also ends the standing chat approval
         _drop_standing(who)
