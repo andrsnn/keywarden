@@ -20,6 +20,7 @@ import shutil
 import subprocess
 
 TIMEOUT = 30
+CLASSIFY_TIMEOUT = 15  # under the 20 seconds the prompt plugin waits for a capture
 MODEL = os.environ.get("KEYWARDEN_INTENT_MODEL", "haiku")
 # Set in the child process so keywarden's own prompt hook does nothing inside the model call.
 GUARD = "KEYWARDEN_INTENT_CALL"
@@ -113,6 +114,65 @@ def read(text, requests, context=None, held=False):
     if got is None:
         raise Unavailable(f"model answer not understood (exit {proc.returncode})")
     return got
+
+
+def _classify_prompt(text, items, context=None):
+    listed = "\n".join(f"- [{i['label']}]: {i['shape']}" + (f", keywarden would call it {i['name']}" if i.get("name") else "")
+                       for i in items)
+    head = ("A person sent a chat message to an AI coding agent. keywarden, their key store, found values in it that "
+            "might be secrets to save, or might be public identifiers that are not secret. The values are replaced "
+            f"by labels, and here is what each one looks like:\n{listed}\n\n")
+    if context:
+        head += ("The agent's last message to the person, for context (it may ask for a key and name it):\n"
+                 "<<<AGENT\n" + context[-3000:] + "\nAGENT>>>\n\n")
+    return (
+        head +
+        "For each label, decide whether it is a SECRET the person wants saved (an API key, client secret, password, "
+        "token or private key, including one sent on its own after the agent asked for it) or an ID that is not "
+        "secret (a product, sandbox, deployment, client, app, account or project ID, a GUID, a commit hash, a request "
+        "id, a database row id). When the message or the agent calls the value an ID, it is an ID. A client ID is an "
+        "ID; a client secret is a SECRET.\n"
+        "name: for a SECRET, the key name the person or the agent gave it (like HARD_BURN_EOS_CLIENT_SECRET), in "
+        "upper case with underscores, or null when neither gave one.\n"
+        'Reply with one line of JSON and nothing else, one entry per label: {"VALUE1": {"secret": true or false, '
+        '"name": null or "NAME"}}\n\n'
+        "<<<MESSAGE\n" + text[:4000] + "\nMESSAGE>>>"
+    )
+
+
+def classify(text, items, context=None):
+    """Which found values are secrets to save and which are public IDs. text has each value swapped for [LABEL].
+    items: [{"label", "shape", "name"}]. Returns {label: {"secret": bool, "name": str | None}} for the labels the
+    model answered. Raises Unavailable when no model answered."""
+    exe = os.environ.get("KEYWARDEN_CLAUDE") or shutil.which("claude")
+    if not exe:
+        raise Unavailable("the claude command isn't installed")
+    env = dict(os.environ, **{GUARD: "1"})
+    env.pop(CALLER_VAR, None)
+    try:
+        proc = subprocess.run([exe, "-p", "--model", MODEL, "--output-format", "text"],
+                              input=_classify_prompt(text, items, context), capture_output=True, text=True,
+                              encoding="utf-8", timeout=CLASSIFY_TIMEOUT, env=env)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise Unavailable(str(e)[:200])
+    labels = {i["label"] for i in items}
+    for blob in reversed(re.findall(r"\{.*\}", proc.stdout or "", re.S)):
+        try:
+            got = json.loads(blob)
+        except ValueError:
+            continue
+        if not isinstance(got, dict):
+            continue
+        out = {}
+        for label, v in got.items():
+            if label in labels and isinstance(v, dict) and isinstance(v.get("secret"), bool):
+                name = v.get("name")
+                out[label] = {"secret": v["secret"],
+                              "name": name if isinstance(name, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{1,80}", name)
+                              else None}
+        if out:
+            return out
+    raise Unavailable(f"model answer not understood (exit {proc.returncode})")
 
 
 def judge(text, requests, context=None, held=False):

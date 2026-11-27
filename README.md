@@ -26,7 +26,11 @@ You: Build an AI chat app with this OpenAI API key: sk-…
 Agent: Saved OPENAI_API_KEY to keywarden. Approved for this thread (12 hours).
 ```
 
-Giving a thread a new key is consent to use it, including in its subagents and subprocesses. No second `approve` is needed. To keep the value out of chat entirely, copy it and run `keys add OPENAI_API_KEY --clipboard` in your terminal instead.
+Giving a thread a new key is consent to use it, including in its subagents and subprocesses. No second `approve` is needed.
+
+You can also send just the key, with nothing else in the message. keywarden saves it and takes it out of the message before the agent sees it. It uses the name the agent asked for ("send the client secret and I'll save it as EPIC_CLIENT_SECRET"), and that replaces an older value with the same name. When nobody gave a name, it saves the key as SENT_KEY and the agent renames it. `key NAME value` and `NAME: value` work too.
+
+keywarden doesn't save IDs. Hex strings, GUIDs and values the message calls an ID, like an Epic product, sandbox or client ID, go to the model first, and they're saved only if it reads them as a secret you want saved. If one gets saved by mistake, the agent runs `keys forget NAME`. To keep the value out of chat entirely, copy it and run `keys add OPENAI_API_KEY --clipboard` in your terminal instead.
 
 **2. Approve saved keys up front for a long run.** Start a new Claude or Codex thread with an explicit line naming the keys and duration:
 
@@ -201,12 +205,13 @@ keywarden saves the path, not the key. Each time the key is used, through `keys 
 | `keys add NAME --op op://Vault/Item/field` | Save a 1Password reference. The value is read from 1Password each time the key is used. |
 | `keys lock [NAME ...]` | Clear this thread's grants and its helpers' (your approve in the chat stays); from your terminal, clear every thread's grants and approvals. |
 | `keys note NAME "description"` | Tell agents what a key is for. |
-| `keys add NAME --clipboard` | Save a copied key without pasting into chat. |
+| `keys add NAME --clipboard` | Save a copied key without pasting into chat. It refuses text that looks like prose or logs (over 512 characters, or many spaces or lines) unless you add `--force`. |
+| `keys forget NAME` | Delete a value that isn't a secret, like a public ID saved by mistake, so commands and files can use it. The agent's own save from the same session needs no approval. |
 | `keys import FILE.env` | Save every key in an existing file. |
 | `keys import FILE.env --only NAME1,NAME2` | Save only those keys from the file. If a different value is already saved under a name, keywarden keeps it unless you add `--replace`. |
 | `keys grant NAME --for "why"` | Ask for a key. If NAME isn't saved, keywarden looks for it in .env files on disk, saves it and says which file it came from. Set `AGENT_KEYS_ENV_DIRS` to choose the folders it looks in. |
 | `keys run NAME -- command` | Pass selected keys to a program under the configured approval policy. |
-| `keys rename OLD NEW` / `keys remove NAME` | Rename or delete through the configured approval policy. |
+| `keys rename OLD NEW` / `keys remove NAME` | Rename or delete through the configured approval policy. The agent can rename its own save from the same session without approval. |
 | `keys switch 1password` / `keys switch local` | Copy keys to another store and select it. Old copies remain. |
 | `keys rescue --save --redact` | Save recognized keys, including private key blocks, and scrub Claude's local logs; does not search Codex logs. |
 

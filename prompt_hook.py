@@ -276,6 +276,46 @@ def replacement_plan(text, found, results, spans=()):
     return text, edits
 
 
+# A name the agent gave the key it asked for: "save it as NAME", "keys add NAME", "send me NAME".
+AGENT_NAME = re.compile(r"(?:\bas|keys add|\bsend(?: me)?|\bpaste|\bneed)\s+(?:the\s+|your\s+)?[`*\"']*"
+                        r"([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)\b")
+
+
+def sort_out(text, found, agent_msg):
+    """Keep the secrets and drop public IDs. A value that may be an ID (hex digits, a GUID, or one the message calls
+    an ID) is kept only when the model reads it as a secret the person wants saved; with no model, it's dropped.
+    A key sent with no name takes the name the model, or the agent's last message, gave it, and replaces a saved
+    key of that name. Returns (kept, dropped values)."""
+    import intent
+    import keys
+    doubt = [i for i, (name, v, _) in enumerate(found) if keys.doubtful(text, v, name)]
+    unnamed = [i for i, (name, _, named) in enumerate(found) if not named and name == keys.PLACEHOLDER]
+    verdict = {}
+    if doubt:
+        masked = text
+        for i, (_, v, _) in enumerate(found):
+            masked = masked.replace(v, f"[VALUE{i + 1}]")
+        items = [{"label": f"VALUE{i + 1}", "shape": keys.shape(found[i][1]),
+                  "name": None if found[i][0] == keys.PLACEHOLDER else found[i][0]} for i in doubt]
+        try:
+            verdict = intent.classify(masked, items, agent_msg)
+        except intent.Unavailable:
+            verdict = {}
+    named_by_agent = AGENT_NAME.findall(agent_msg or "")
+    kept, dropped = [], []
+    for i, (name, v, named) in enumerate(found):
+        said = verdict.get(f"VALUE{i + 1}") or {}
+        if i in doubt and said.get("secret") is not True:
+            dropped.append(v)
+            continue
+        if i in unnamed:
+            pick = said.get("name") or (named_by_agent[-1] if len(unnamed) == 1 and named_by_agent else None)
+            if pick:
+                name, named = pick, True  # the agent asked for exactly this key, so it replaces an older value
+        kept.append((name, v, named))
+    return kept, dropped
+
+
 def capture(data, agent):
     """Save detected values, then derive consent from the user's sanitized request. Never return values."""
     import approve
@@ -284,9 +324,13 @@ def capture(data, agent):
     notice_text = text.lstrip().startswith(NOTICES)
     found = [] if notice_text else keys.find_keys(text)
     attached = [] if notice_text else attached_keys(text, data.get("cwd") or "")
+    dropped = []
+    if found:
+        found, dropped = sort_out(text, found, last_agent_message(data.get("transcript_path")))
     if not found and not attached:
         return {"text": text, "saved": []}
-    results = keys.save_found(found, text, data.get("cwd") or "", agent=agent)
+    who = session_caller(data, agent)
+    results = keys.save_found(found, text, data.get("cwd") or "", agent=agent, session=who)
     spans, files = [], []
     for (start, end), path, file_found in attached:
         saved = keys.save_found(file_found, f"attached file {path.name}", data.get("cwd") or "", agent=agent)
@@ -296,14 +340,16 @@ def capture(data, agent):
         files.append(path.name)
         drop_upload(path)
     text, edits = replacement_plan(text, found, results, spans)
-    if keys.find_keys(text) or attached_keys(text, data.get("cwd") or ""):
+    if [f for f in keys.find_keys(text) if f[1] not in dropped] or attached_keys(text, data.get("cwd") or ""):
         raise ValueError("a detected value remained after replacement")
     names = list(dict.fromkeys(name for name, _ in results))
-    who = session_caller(data, agent)
+    replaced = [name for name, how in results if how == "replaced"]
     # Giving a thread a key approves its descendants too. Protected keys and phone mode still ask.
     approved = approve.grant_from_prompt(names, text, who)
     pending = [name for name in names if name not in approved]
     notice = f"Saved {', '.join(names)} to keywarden."
+    if replaced:
+        notice += f" It replaced the old value of {', '.join(replaced)}."
     span = approve.span(approve.paste_minutes())
     if approved:
         if approve.settings()[0] == "auto":
@@ -320,6 +366,14 @@ def capture(data, agent):
                'Run keys status, then use "$NAME" in commands. ')
     if pending:
         context += f"{', '.join(pending)} has no new grant from this paste. Request approval with keys grant before use. "
+    if keys.PLACEHOLDER in " ".join(names):
+        context += (f"The key came with no name, so it's saved as {', '.join(n for n in names if keys.PLACEHOLDER in n)}"
+                    ". Rename it with keys rename OLD NEW (no approval needed for your own save from this session). ")
+    if dropped:
+        context += ("keywarden didn't save the other values in the message: they look like public IDs, not secrets. "
+                    "You may use them as written. ")
+    context += ("If keywarden saved something that isn't a secret, run keys forget NAME (no approval needed for a "
+                "save from this session). ")
     if files:
         context += (f"The person attached {', '.join(files)}, which held a key. keywarden took the file out of the "
                     "message, so you did not see it. ")
@@ -394,6 +448,8 @@ def main():
             out = capture(data, AGENT)
         except BaseException:
             block("keywarden couldn't finish saving or approving the key. Your message wasn't sent. Check keys setup.")
+        found = out["saved"]  # empty when every value turned out to be a public ID
+    if found:
         disclosure = (f" {AGENT}'s prompt hook cannot replace your original message; the pasted value can reach "
                       "the model and local history. Local redaction is best-effort.")
         context = (out["context"] + " " + named_in(out["text"], data, AGENT) + disclosure +

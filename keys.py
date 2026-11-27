@@ -17,7 +17,8 @@
   keys protect NAME                 this key always needs a tap, or the code in totp mode (keys unprotect NAME)
   keys phone                        approve key use from your phone (then: keys phone test)
   keys add NAME [--clipboard | --from-env VAR] [--note "what it is"]
-                                    save a key (from the clipboard, a variable, a pipe, or typed hidden)
+                                    save a key (from the clipboard, a variable, a pipe, or typed hidden).
+                                    --clipboard refuses text that looks like prose or logs unless you add --force
   keys add NAME --op op://Vault/Item/field
                                     save a 1Password reference instead of a value; each use reads it with op
   keys import FILE.env [--only A,B] save the NAME=value lines of a .env file (only A and B with --only)
@@ -25,6 +26,8 @@
   keys note NAME "what it is"       add a note to a key, shown in keys list and to each new agent session
   keys rename OLD NEW               rename a saved key
   keys remove NAME                  delete a saved key
+  keys forget NAME                  delete a value that isn't a secret (a public ID) saved by mistake; no approval
+                                    when the chat hook saved it in this session
   keys ref NAME                     print the line for a .env.tpl file
   keys run NAME [VAR=NAME] -- CMD   run CMD with those keys set as environment variables
   keys grant NAME --for WHY         ask for approval; a NAME that isn't saved is looked for in .env files
@@ -325,6 +328,14 @@ def need_approval(names, action):
         die("not approved, so nothing changed.")
 
 
+def not_a_key(v):
+    """Clipboard text that looks like prose or logs: over 512 characters, or many spaces or line breaks. A private
+    key block or a well-known key format is fine."""
+    if PEM.fullmatch(v) or KNOWN.fullmatch(v):
+        return False
+    return len(v) > 512 or v.count("\n") >= 2 or len(v.split()) > 3
+
+
 def cmd_add(args):
     """Save a key from the clipboard, an environment variable, a pipe, or typed in hidden."""
     from_env = args[args.index("--from-env") + 1] if "--from-env" in args else None
@@ -367,6 +378,9 @@ def cmd_add(args):
     value = value.strip()
     if len(value) < 8:
         die("that doesn't look like a key.")
+    if "--clipboard" in args and "--force" not in args and not_a_key(value):
+        die(f"the clipboard holds {len(value)} characters that look like text or logs, not a key, so nothing was "
+            "saved. Copy just the key and run this again, or add --force to save it anyway.")
     names = existing_names()
     if name in names:
         if "--replace" not in args:
@@ -536,6 +550,34 @@ def cmd_note(args):
         die(f"there's no saved key called {name}. See keys list.")
     set_meta(name, note=" ".join(args[1:]).strip())
     print(f"{name}: {describe(name)}")
+
+
+def own_save(name, meta=None):
+    """True when keywarden's chat hook saved this key in the calling agent's own session."""
+    who = approve.caller()
+    auto = (load_json(META, {}) if meta is None else meta).get(name, {}).get("auto")
+    return bool(auto) and who != approve.TERMINAL and auto == who
+
+
+def cmd_forget(args):
+    """keys forget NAME: delete a value saved by mistake, like a public ID the chat hook took for a key. The agent's
+    own save from this session needs no approval; anything else asks like keys remove."""
+    names = [norm_name(n) for n in args if not n.startswith("--")]
+    if not names:
+        die("usage: keys forget NAME [NAME ...]")
+    have = existing_names()
+    missing = [n for n in names if n not in have]
+    if missing:
+        die(f"there's no saved key called {', '.join(missing)}. See keys list.")
+    meta = load_json(META, {})
+    ask = [n for n in names if not own_save(n, meta)]
+    if ask:
+        need_approval(ask, "forget them" if len(ask) > 1 else "forget it")
+    save_json(SAVED, {k: v for k, v in load_json(SAVED, {}).items() if v not in names})
+    save_json(META, {k: v for k, v in load_json(META, {}).items() if k not in names})
+    for n in names:
+        call(store_now().delete, n)
+        print(f"Forgot {n}. It's no longer saved, so commands and files may use that value as written.")
 
 
 def cmd_remove(args):
@@ -956,7 +998,11 @@ def cmd_rename(args):
     if len(args) != 2:
         die("usage: keys rename OLD_NAME NEW_NAME")
     old, new = norm_name(args[0]), norm_name(args[1])
-    need_approval([old], f"rename it to {new}")
+    names = existing_names()
+    if old not in names:
+        die(f"there's no saved key called {old}. See keys list.")
+    if new in names or not own_save(old):  # the agent's own save from this session renames without asking
+        need_approval([old] + ([new] if new in names else []), f"rename it to {new}")
     call(store_now().rename, old, new)
     saved = load_json(SAVED, {})
     save_json(SAVED, {k: (new if v == old else v) for k, v in saved.items()})
@@ -1096,10 +1142,12 @@ KNOWN = re.compile("|".join(f"(?P<g{i}>{B}{p}{E})" for i, (_, p) in enumerate(PA
 PREFILTER = re.compile("|".join(p for _, p in PATTERNS))
 # Keys with no known prefix: only looked for in text you typed. Long runs with upper, lower and digits,
 # at most one _ or -, and not part of a path or file name.
-GENERIC = re.compile(r"(?<![A-Za-z0-9_\-\\/.:])[A-Za-z0-9_\-]{32,120}(?![A-Za-z0-9_\-\\/.:])")
+GENERIC = re.compile(r"(?<![A-Za-z0-9_\-\\/.:+=])[A-Za-z0-9_\-+/=]{32,120}(?![A-Za-z0-9_\-\\/.:+=])")
 
 
 def generic_ok(v):
+    if "/" in v and re.search(r"(?:^|/)[A-Za-z][a-z]{2,}(?=/)", v):
+        return False  # a path, like src/components/View2
     return (sum(c in "_-" for c in v) <= 1 and sum(c.isdigit() for c in v) >= 4
             and sum(c.isupper() for c in v) >= 3 and sum(c.islower() for c in v) >= 3
             and not v.lower().startswith("session"))
@@ -1201,6 +1249,13 @@ def find_keys(text):
         if block:
             off = m.end() + len(rest) - len(rest.lstrip("\r\n \t"))
             add(m.group(1), block.group(0).strip(), True, (off, off + block.end()))
+    one = SINGLE_PAIR.match(text)  # "NAME: value" or NAME=value sent on its own
+    if one and _raw_ok(one.group(2)) and not one.group(2).isdigit():
+        add(one.group(1), one.group(2), True, one.span(2))
+    alone = text.strip()
+    if BARE.fullmatch(alone) and bare_ok(alone):  # a key sent on its own, with nothing else in the message
+        at = text.find(alone)
+        add(PLACEHOLDER, alone, False, (at, at + len(alone)))
     orig, text = text, re.sub(r"\S*://\S*", lambda m: " " * len(m.group(0)), text)  # links aren't keys
     asked = bool(SAVE_WORDS.search(text))
     as_name = AS_NAME.search(text) if asked else None
@@ -1237,6 +1292,66 @@ def find_keys(text):
     return found
 
 
+# A key sent on its own: one run of 20 to 200 key characters (base64 too) and nothing else in the message.
+BARE = re.compile(r"[A-Za-z0-9_\-+/=.~]{20,200}")
+SINGLE_PAIR = re.compile(r"^\s*([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)[ \t]*[:=][ \t]*[\"']?([^\s\"']{8,200})[\"']?\s*$")
+PLACEHOLDER = "SENT_KEY"  # the name for a key sent with no name; the agent renames it without approval
+GUID = r"\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?"
+HEX_OR_GUID = re.compile(r"(?i)" + GUID + r"|[0-9a-f]{8,}")
+ID_NAME = re.compile(r"(?:^|_)(?:IDS?|GUID|UUID)(?:_|$)")
+ID_WORDS = {"id", "ids", "identifier", "guid", "uuid"}
+SECRET_WORDS = {"secret", "secrets", "password", "passwd", "token", "tokens", "credential", "credentials", "pat",
+                "apikey"}
+
+
+def bare_ok(v):
+    """A lone value that could be a key: mixed letters and digits, not a word, name, path, file or link."""
+    # base64 keys can start with / or +, so this doesn't use _raw_ok's path test
+    if (not plausible(v) or not any(c.isalpha() for c in v) or IDENT.match(v) or v.startswith((".", "~"))
+            or v.lower().startswith(("http", "www")) or re.search(r"\.[A-Za-z]{2,4}(?:/|$)", v)):
+        return False
+    # a path: a piece between slashes that is a plain word, like src/components/View2
+    return not re.search(r"(?:^|[/\\])[A-Za-z][a-z]{2,}(?=[/\\])", v)
+
+
+def shape(v):
+    """What a value looks like, without the value: for the model that tells keys from IDs."""
+    if re.fullmatch(r"(?i)" + GUID, v):
+        return "a GUID"
+    if re.fullmatch(r"(?i)[0-9a-f]+", v):
+        return f"{len(v)} hex digits"
+    kinds = [k for k, ok in (("upper case", any(c.isupper() for c in v)), ("lower case", any(c.islower() for c in v)),
+                             ("digits", any(c.isdigit() for c in v))) if ok]
+    extra = sorted(set(c for c in v if not c.isalnum()))
+    return f"{len(v)} characters: {', '.join(kinds)}" + (f", and {' '.join(extra)}" if extra else "")
+
+
+def called_id(text, value, name=""):
+    """True when the name or the words just before the value call it an ID, like "Epic product ID: ..."."""
+    if ID_NAME.search(name) and not re.search(r"SECRET|PASSWORD|TOKEN", name):
+        return True
+    at = text.find(value)
+    if at < 0:
+        return False
+    words = re.findall(r"[A-Za-z]+", re.split(r"[\n.!?;]", text[max(0, at - 80):at])[-1])[-4:]
+    for w in reversed(words):
+        if w.lower() in SECRET_WORDS:
+            return False
+        if w.lower() in ID_WORDS:
+            return True
+    return False
+
+
+def doubtful(text, value, name=""):
+    """A found value that may be a public ID rather than a secret: hex digits, a GUID, or something the message
+    calls an ID. A well-known key format, a private key block or `key NAME value` is never doubtful."""
+    if KNOWN.fullmatch(value) or "PRIVATE KEY-----" in value:
+        return False
+    if any(m.group(2) == value for m in KEY_LINE.finditer(text)):
+        return False
+    return bool(HEX_OR_GUID.fullmatch(value)) or called_id(text, value, name)
+
+
 def known_key_in(text):
     """The kind of key, if text has one in a well-known format (sk-..., ghp_..., AKIA..., a private key block)."""
     if PEM.search(text):
@@ -1248,7 +1363,8 @@ def known_key_in(text):
 
 
 # Saved values that aren't secret, so they may appear in commands and files: bucket names, account IDs, regions...
-NOT_SECRET = re.compile(r"(?:ACCOUNT_ID|BUCKET|REGION|ENDPOINT|URL|HOST|USERNAME|USER|EMAIL)(?:_\d+)?$")
+NOT_SECRET = re.compile(r"(?:ACCOUNT_ID|(?:PRODUCT|SANDBOX|DEPLOYMENT|CLIENT|APP|PROJECT|TENANT)_ID|BUCKET|REGION|"
+                        r"ENDPOINT|URL|HOST|USERNAME|USER|EMAIL)(?:_\d+)?$")
 
 
 def key_in(text):
@@ -1265,7 +1381,7 @@ def key_in(text):
     return None
 
 
-def save_found(found, text="", where="", agent="Claude"):
+def save_found(found, text="", where="", agent="Claude", session=None):
     """Save keys found in a message. A name the person chose replaces a saved key with that name. A name
     keywarden picked gets _2, _3... if it's taken. Returns [(name, 'saved' | 'replaced' | 'already saved')].
     The message, with every key in it swapped for its name, is kept as where the key came from."""
@@ -1287,6 +1403,8 @@ def save_found(found, text="", where="", agent="Claude"):
                 name, i = f"{base}_{i}", i + 1
         out.append((name, "replaced" if name in names else "saved"))
         store(name, v, replace=True, names=names, source=source)
+        if session:  # the agent may forget or rename its own save from this session without asking
+            set_meta(name, auto=session)
         saved[fingerprint(v)] = name
     return out
 
@@ -1527,7 +1645,7 @@ def cmd_capture(args):
 
 COMMANDS = {"_capture": cmd_capture, "_scrub": cmd_scrub, "note": cmd_note, "setup": cmd_setup, "switch": cmd_switch, "strict": cmd_strict, "approvals": cmd_approvals,
             "touchid": cmd_touchid, "hello": cmd_touchid, "totp": cmd_totp,
-            "protect": cmd_protect, "unprotect": cmd_unprotect, "phone": cmd_phone, "remove": cmd_remove, "lock": cmd_lock, "grant": cmd_grant, "status": cmd_status, "env": cmd_env, "add": cmd_add, "import": cmd_import, "list": cmd_list, "rename": cmd_rename, "ref": cmd_ref,
+            "protect": cmd_protect, "unprotect": cmd_unprotect, "phone": cmd_phone, "remove": cmd_remove, "forget": cmd_forget, "lock": cmd_lock, "grant": cmd_grant, "status": cmd_status, "env": cmd_env, "add": cmd_add, "import": cmd_import, "list": cmd_list, "rename": cmd_rename, "ref": cmd_ref,
             "run": cmd_run, "rescue": cmd_rescue}
 
 
